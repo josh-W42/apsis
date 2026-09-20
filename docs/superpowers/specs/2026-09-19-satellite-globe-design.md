@@ -412,6 +412,45 @@ cross-origin isolation is required (it is not).
 | `json2satrec` startup cost (274 ms) delays interactivity | Runs in the worker, off the main thread; globe shell renders first |
 | Texture payload undermines fast first paint | Progressive 2k -> 4k load; measure against the fast-first-paint goal |
 
+## Implementation findings (phase 1)
+
+Four things surfaced during implementation that the design did not anticipate.
+All affect later phases.
+
+**The WASM runtime must never be disposed.** `runtime.dispose()` calls
+emscripten's `_exit_runtime()`, which tears the module down *process-wide and
+permanently* — every later `createSingleThreadRuntime()` throws `ExitStatus`.
+React StrictMode double-invokes effects, so a core disposing its own runtime
+kills the page on the second mount. The runtime is cached at module scope and
+never disposed; only the `BulkPropagator` is.
+
+**The globe must be tilted into the ECI frame.** three.js `SphereGeometry`
+puts its poles on +Y; ECI north is +Z. Satellite positions are ECI, so without
+a quarter-turn about X the globe sits 90 degrees out from every orbit. An
+untextured sphere looks identical either way, which is precisely why this
+needs a regression test rather than a visual check. The globe also rotates by
+GMST so geography tracks the terminator — a prerequisite for phase 2's ground
+tracks.
+
+**Frame scheduling must derive from the wall clock, not accumulate.** The
+first implementation advanced a counter seeded before worker init; the ~300 ms
+of catalog fetch and satrec construction put it permanently behind, and alpha
+reached 1.7. `setAlpha` clamps, so the visible symptom was dots freezing at the
+end of every one-second segment — with no error anywhere. The window
+arithmetic now lives in tested pure functions (`src/render/schedule.ts`).
+
+**Vite needs an ES2022 target.** satellite.js's emscripten builds use
+top-level await. Vite's default `es2020` target fails during dependency
+optimization — including on the pthreads build the app never calls, because
+the optimizer parses every entry in the package's `imports` map.
+
+### Verified against orbital mechanics
+
+End-to-end measurement of the running app: a satellite at 7,335 km radius
+(964 km altitude) moved 73.8 km in 10.0 s, an implied 7.383 km/s against a
+theoretical circular velocity of 7.372 km/s — **0.15% agreement**, with the
+small excess explained by chord-versus-arc over the interval.
+
 ## Revision history
 
 ### Revision 2 — 2026-09-19
