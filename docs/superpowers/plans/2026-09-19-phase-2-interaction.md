@@ -1897,6 +1897,17 @@ export function createPicker(deps: PickerDeps): PickerHandle {
   points.frustumCulled = false;
   scene.add(points);
 
+  // An occluder matching the visible earth. Without it the pick pass holds
+  // only points, so depth testing cannot hide the far side and clicking the
+  // globe selects an invisible satellite behind it. It renders black, which
+  // decodes to "nothing here". Scene units are earth radii, so a unit sphere
+  // at the origin matches.
+  const occluder = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 128, 64),
+    new THREE.MeshBasicMaterial({ color: 0x000000 }),
+  );
+  scene.add(occluder);
+
   const target = new THREE.WebGLRenderTarget(1, 1, {
     format: THREE.RGBAFormat,
     type: THREE.UnsignedByteType,

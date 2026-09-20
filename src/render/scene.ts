@@ -6,6 +6,7 @@ export interface SceneHandle {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
+  canvas: HTMLCanvasElement;
   setSunDirection(d: { x: number; y: number; z: number }): void;
   setTime(date: Date): void;
   /** Place the camera so the globe opens on a lit view with a visible terminator. */
@@ -73,6 +74,7 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   return {
     scene, camera, renderer,
+    canvas: renderer.domElement,
     setSunDirection: earth.setSunDirection,
     setTime: earth.setTime,
     frameSun(sun) {

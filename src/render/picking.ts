@@ -60,6 +60,21 @@ export function createPicker(deps: PickerDeps): PickerHandle {
   points.frustumCulled = false;
   scene.add(points);
 
+  // An occluder matching the visible earth.
+  //
+  // Without it the pick pass contains only points, so depth testing cannot
+  // hide the far side and clicking the globe selects an invisible satellite
+  // behind it. It renders black, which decodes to "nothing here", so the
+  // earth correctly reads as empty space while still writing depth.
+  //
+  // Scene units are earth radii (points are scaled by SCENE_SCALE), so a
+  // unit sphere at the origin matches. A sphere needs no rotation.
+  const occluder = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 128, 64),   // match the visible earth's tessellation
+    new THREE.MeshBasicMaterial({ color: 0x000000 }),
+  );
+  scene.add(occluder);
+
   const target = new THREE.WebGLRenderTarget(1, 1, {
     format: THREE.RGBAFormat,
     type: THREE.UnsignedByteType,
@@ -98,6 +113,8 @@ export function createPicker(deps: PickerDeps): PickerHandle {
     },
     dispose() {
       material.dispose();
+      occluder.geometry.dispose();
+      (occluder.material as THREE.Material).dispose();
       target.dispose();
     },
   };
