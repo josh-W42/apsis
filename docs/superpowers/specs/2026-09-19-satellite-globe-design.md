@@ -1,7 +1,13 @@
 # apsis — live 3D satellite globe
 
 **Date:** 2026-09-19
-**Status:** Approved design, pending implementation plan
+**Status:** Approved (revision 2), pending implementation plan
+
+> **Revision 2 (2026-09-19).** Benchmarking satellite.js 7.1.0 against the real
+> catalog invalidated several load-bearing assumptions in revision 1. The worker
+> pool, the cross-origin isolation question, the custom binary format and the
+> WebGPU phase have all been removed. See *Measured findings* and *Revision
+> history*.
 
 ## Context
 
@@ -36,7 +42,8 @@ Consequences, all favourable:
 - Render the full active catalog (16,578 objects) at 60 fps
 - Select or search a satellite; show orbit trail, ground track, and detail panel
 - Observer mode: overhead-now, pass prediction, sky view
-- Headroom to scale to the full tracked catalog (~28k+, including debris)
+- Headroom to scale to the full tracked catalog (~28k+, including debris) —
+  measured at 18.6 ms per tick, so this is a credential change, not re-architecture
 - Zero runtime hosting cost
 
 ## Non-goals
@@ -66,11 +73,52 @@ Verified against live endpoints on 2026-09-19:
 `DECAY_DATE`, `PERIOD`, `INCLINATION`, `APOGEE`, `PERIGEE`, `RCS` — the entire
 detail panel and the regime colour-coding, at no cost.
 
+### Propagation benchmark
+
+Measured 2026-09-19 against the full 16,578-object catalog, satellite.js 7.1.0,
+Node v23.10.0:
+
+| Measurement | Result |
+|---|---|
+| `JSON.parse` of the 6.9 MB payload | **19.3 ms** |
+| `json2satrec` x 16,578 | **273.7 ms** (one-time; paid in any wire format) |
+| Pure-JS `propagate()`, whole catalog | **46.6 ms** per tick |
+| WASM single-thread `BulkPropagator` | **11.0 ms** per tick (4.2x faster) |
+| SGP4 error / decayed flagged | **1 of 16,578** (0.01%) |
+| Extrapolated to 28k objects | **18.6 ms** per tick |
+
+At a 1 Hz tick the WASM path consumes **1.1% of one second**. This is the
+finding that reshaped the design.
+
+### Threading requirement
+
+satellite.js ships two emscripten builds. Inspected directly:
+
+| Build | Size | `SharedArrayBuffer` / pthread refs | Cross-origin isolation |
+|---|---|---|---|
+| `base-release` | 126 KB | **none** | not required |
+| `pthreads-release` | 285 KB | 1 / 117, plus `Atomics` | **required** |
+
+Since the single-thread build is roughly 50x under budget, the pthreads build
+is unnecessary and **COOP/COEP headers are not needed.**
+
 **A 403 was observed** from Celestrak partway through probing, after only a
 handful of requests. The cause is unconfirmed: it may have been the
 `Accept-Encoding: gzip` request header, or rate limiting. Subsequent requests
-succeeded, which argues for the header. Either way it justifies keeping
-visitors off Celestrak entirely.
+succeeded, which argues for the header.
+
+Separately and more concretely: during benchmarking, a repeat request returned
+**HTTP 200 with a plain-text body** rather than JSON:
+
+```
+GP data has not updated since your last successful
+download of GROUP=active at 2026-09-20 01:16:54 UTC.
+```
+
+Celestrak tracks the caller's last successful fetch and declines to re-serve
+unchanged data. **This is a required ingestion error case** — a 200 response is
+not a guarantee of JSON. It is also the clearest argument for keeping visitors
+off Celestrak entirely.
 
 ### Resolved conflict: scale vs. hosting
 
@@ -93,9 +141,9 @@ Two halves, with a file as the interface. Nothing runs at request time.
 
 ```
 GitHub Actions (cron, 2x daily)          Static host (Cloudflare Pages)
-  fetch GP JSON  ─┐                        elements.bin  ──> browser
-  fetch satcat   ─┼─> join ─> encode ─>    meta.bin
-                  ┘                        manifest.json
+  fetch GP JSON  ─┐                        catalog.json  ──> browser
+  fetch satcat   ─┼─> join ─> trim ──>     manifest.json
+                  ┘
 ```
 
 ### Data pipeline (`ingest/`, Node-only)
@@ -105,59 +153,70 @@ GitHub Actions (cron, 2x daily)          Static host (Cloudflare Pages)
 3. Drop any record with a `DECAY_DATE`
 4. Encode and emit three artifacts
 
-| Artifact | Contents | Path |
-|---|---|---|
-| `elements.bin` | SGP4 inputs — hot path | fetched first |
-| `meta.bin` | names, owners, launch dates, types, apogee/perigee — cold path | streams behind |
-| `manifest.json` | generated-at, counts, checksums | fetched first |
+| Artifact | Contents |
+|---|---|
+| `catalog.json` | Trimmed OMM elements with SATCAT metadata pre-joined |
+| `manifest.json` | generated-at, object count, checksum |
 
-Splitting hot from cold is a perceived-performance decision: the globe renders
-from `elements.bin` alone while metadata streams in behind it. Search becomes
-available a beat after the dots appear.
+Revision 1 split these into hot and cold artifacts to get the globe rendering
+before metadata arrived. With parse measured at 19.3 ms for the *untrimmed*
+payload, that split buys nothing and is dropped. One artifact, one fetch.
 
 **Cadence:** twice daily. Elements update 1-8x/day per object; twice daily keeps
 positions well within the accuracy the model itself supports.
 
-### Binary format (`format/`)
+### Artifact format
 
-`elements.bin` is **struct-of-arrays**: a header followed by ten contiguous
-typed arrays (epoch, mean motion, eccentricity, inclination, RAAN, argument of
-pericenter, mean anomaly, bstar, ndot, nddot) plus a `NORAD_CAT_ID` index.
+Revision 1 specified a custom struct-of-arrays binary format. **It has been
+dropped.** Its two strongest justifications both failed under measurement:
 
-Three reasons, the third being decisive:
+- *"Zero parse cost"* — the real `JSON.parse` cost is 19.3 ms, not the ~150 ms
+  estimated, and it is dwarfed by the 273.7 ms of `json2satrec` construction
+  that is paid in any wire format.
+- *"It is the WebGPU seam"* — the WebGPU phase has been removed (see below).
 
-1. No alignment padding; workers transfer only the fields they touch
-2. `new Float64Array(buf, offset, count)` is zero-copy — **0 ms parse** instead
-   of roughly 150 ms for the 6.9 MB JSON
-3. **Each field is already a storage buffer.** This is the seam that makes the
-   WebGPU phase cheap: it binds these arrays directly, with no restructuring.
+Ingestion instead emits **trimmed OMM JSON**: only the fields SGP4 and the
+detail panel actually consume, with SATCAT metadata pre-joined. This deletes the
+`format/` module, its encoder and decoder, its golden-file test and its
+round-trip test, at a cost of roughly 350 KB of transfer and 19 ms of parse.
 
-**Precision:** Float64 for epoch and mean motion; Float32 for everything else.
-Mean motion carries ~10 significant figures and its error integrates linearly
-into mean anomaly over time, so it cannot be narrowed. The angles are specified
-to ~4 decimal places, comfortably inside Float32.
-
-**Honest accounting:** ~860 KB raw, and floats compress poorly, so roughly
-700 KB over the wire versus 1.06 MB gzipped JSON. The size win is modest. The
-real wins are the eliminated parse cost, the GPU-ready layout, and isolating
-visitors from Celestrak.
-
-`format/` is the only module imported by both halves. It is the contract.
+Build-time ingestion itself is unaffected and remains strongly justified — it is
+what keeps visitors off Celestrak and what makes the Space-Track upgrade a
+credential change rather than an architecture change.
 
 ### Propagation (`propagation/`)
 
-A worker pool sized `hardwareConcurrency - 1`, capped around 8, each worker
-owning a contiguous slice of the catalog.
+**One worker, not a pool.** Revision 1 specified a `hardwareConcurrency`-sized
+pool with slice partitioning and double-buffered transferables. At 11.0 ms for
+the entire catalog that machinery solves a problem that does not exist.
 
-**Transferable `ArrayBuffer`s with double-buffering**, not `SharedArrayBuffer`.
-Transfers are zero-copy moves, and this avoids COOP/COEP headers entirely.
+The single worker is justified by two costs that would otherwise block the main
+thread, neither of them the propagation itself:
 
-**Propagation is fully decoupled from framerate.** Workers emit position *and*
-velocity — SGP4 returns both at no extra cost — and the vertex shader performs
-cubic Hermite interpolation between ticks. The CPU propagates at 1 Hz; the GPU
-animates at 60 fps.
+- the 273.7 ms of `json2satrec` construction at startup, which would delay first
+  paint
+- the 11 ms tick, which would drop a frame once per second if run on the main
+  thread
 
-Error budget for a 550 km LEO orbit:
+Propagation uses satellite.js's **`BulkPropagator`** with the WASM
+`createSingleThreadRuntime()`. `EciBaseCalculator` returns exactly what the
+renderer needs:
+
+- `position`: `Float64Array`, packed `[x0,y0,z0,x1,y1,z1,...]`
+- `velocity`: `Float64Array`, same packing
+- `error`: `Int8Array`, one `SatRecError` per satellite
+
+Run with `communityDecayCheckEnabled: true`, which flags long-decayed objects
+that SGP4 would otherwise propagate to meaningless positions. Measured, this
+flags 1 record in 16,578. Flagged satellites are excluded from the render set at
+init; a non-zero error must never be rendered.
+
+**Hermite interpolation survives, with a revised rationale.** It is no longer
+about CPU budget — that concern is gone. It is about buffer-upload economy: the
+CPU uploads new position/velocity buffers at 1 Hz and the GPU interpolates
+between them, rather than re-uploading every frame at 60 Hz.
+
+Error budget for a 550 km LEO orbit, unchanged from revision 1:
 
 | Tick interval | Linear interpolation | Hermite |
 |---|---|---|
@@ -165,24 +224,17 @@ Error budget for a 550 km LEO orbit:
 | 2 s | ~4 m | negligible |
 | 10 s | ~104 m | centimetre-scale |
 
-At 1 Hz even naive linear interpolation is sub-metre, so Hermite is not buying
-correctness today. **It is the headroom for the 28k debris case**, where tick
-intervals can drop to 5-10 s — a tenfold reduction in propagation cost with no
-visible change.
+#### Removed: the WebGPU phase
 
-#### The WebGPU seam
+Revision 1 carved out a `WebGPUPropagator` as phase 4, with the data layout
+designed around it. **This is removed.** At 18.6 ms per tick for 28k objects on
+a single thread there is no performance problem left to solve, and porting SGP4
+to WGSL to compete with a tuned C build compiled to WASM would be a poor trade —
+particularly given SGP4's deep-space branches are conditional-heavy and hostile
+to SIMD lanes.
 
-The `Propagator` interface returns a **position-source handle**, not raw arrays,
-so both implementations satisfy one contract:
-
-- `WorkerPoolPropagator` (phase 1) — uploads a buffer
-- `WebGPUPropagator` (phase 4) — hands back a buffer the renderer already binds,
-  so positions never leave the GPU
-
-The SGP4 implementation is an **injected dependency**, and workers are created
-through a factory. This is deliberate: `vi.mock` is unusable in this
-environment under bun, so dependency injection is the only path to testable
-code. It is designed in, not bolted on.
+If the catalog ever grows far beyond 28k, the cheaper next step is the
+`pthreads-release` build behind COOP/COEP headers, not a WGSL rewrite.
 
 ### Rendering (`render/`)
 
@@ -225,19 +277,21 @@ contrast against a dark starfield is an implementation-time concern.
 
 ### Observer mode (`observer/`)
 
-**Overhead-now is nearly free.** The worker pool already holds every position;
-it needs only an ECI -> ECEF -> topocentric transform to produce azimuth,
-elevation and range, then a filter on elevation > 0.
+**Overhead-now is nearly free.** The propagation worker already holds every
+position. satellite.js provides `LookAnglesCalculator` as a `BulkPropagator`
+calculator, producing azimuth, elevation and range directly; filter on
+elevation > 0.
 
 **Pass prediction** gets its own worker: coarse-scan the selected satellite at
 30 s steps over 48 hours, detect sign changes in `(elevation - threshold)`, then
 bisect to ~1 s precision. Culmination falls out of a golden-section search over
 the same interval.
 
-**Visible-pass filtering** is included: a pass is only observable if the
-satellite is sunlit while the observer is in darkness. Modest extra geometry,
-and it is the difference between a technically-correct listing and one worth
-acting on.
+**Visible-pass filtering** is included, and is now close to free: satellite.js
+ships `shadowFraction(sunEciAU, satelliteEciKm)` and a matching
+`ShadowFractionCalculator`, returning 0 for fully lit through 1 for umbra. Sun
+position comes from `sunPos(jday)`. A pass is observable when the satellite is
+lit and the observer is in darkness.
 
 Sky view is a polar azimuth/elevation plot. SVG is sufficient; ECharts is an
 option for consistency with Live-Telemetry-Viewer.
@@ -267,24 +321,28 @@ Test-driven throughout. Dependency injection everywhere, so no `vi.mock`. Test
 commands are scoped to explicit paths — `bun test` otherwise pulls in sibling
 workspace packages.
 
-**Highest-value test: the official SGP4 verification vectors.** Vallado's
-*Revisiting Spacetrack Report #3* publishes a suite of elements with expected
-state vectors. Running the full path — encode -> decode -> propagate — against
-those proves the math end to end, and would catch a Float32 precision mistake in
-the encoder.
+**Revision 2 reframes the top test.** Revision 1 proposed running Vallado's
+official SGP4 verification vectors end to end. Investigation showed that
+satellite.js is built from Vallado's reference C++ (`src-cpp/SGP4.cpp`) and
+already verifies against those vectors upstream; its fixtures are 51,949 lines
+of TLEs and a 75 MB results file, far too large to vendor. Re-running them would
+be testing someone else's library.
 
-> **Unverified:** this suite is believed to exist and be public, but the exact
-> file and format must be confirmed before the implementation plan depends on
-> it. This is the first thing the plan should validate.
+**The highest-value test is pipeline fidelity instead:** take a fixed set of OMM
+records, run them through ingest -> artifact -> load -> propagate, and assert the
+resulting state vectors match a direct `propagate()` call on the original
+records to within tight tolerance. That tests our code, which is the only code
+that can break here.
 
 Supporting tests:
 
 | Test | Asserts |
 |---|---|
-| Ingestion golden-file | Fixed GP + SATCAT fixture produces byte-exact `elements.bin` |
-| Round-trip | Decoded values within Float32 epsilon of source |
+| Ingestion join | GP record joined to its SATCAT row by `NORAD_CAT_ID`; unmatched records retained with null metadata |
+| Ingestion trim | Every field SGP4 and the detail panel consume survives the trim; no extras |
+| Celestrak refusal | A 200 response whose body is not JSON is rejected, and the previous artifact is retained |
+| Decay filtering | Records with a `DECAY_DATE`, and satellites whose `error` is non-zero, are excluded from the render set |
 | Hermite interpolation | Interpolated position at *t* within 10 m of direct propagation at *t* |
-| Worker partitioning | Property test: slices cover `[0, n)` exactly once |
 | Coordinate transforms | ECI -> ECEF -> topocentric against reference values |
 | Pass prediction | Contract test on a synthetic circular overhead orbit: rise/set symmetric, culmination ~90 deg elevation |
 
@@ -296,9 +354,8 @@ rather than mirroring the implementation.
 | Module | Purpose | Depends on |
 |---|---|---|
 | `ingest/` | Fetch, join, encode. Node-only, fixture-testable, no browser. | — |
-| `format/` | Encode/decode and schema. The contract between halves. | — |
-| `propagation/` | `Propagator` interface and worker pool. No Three.js. | `format` |
-| `render/` | Three.js scene. No knowledge of SGP4. | `format` |
+| `propagation/` | Worker wrapping `BulkPropagator`. No Three.js. | — |
+| `render/` | Three.js scene. No knowledge of SGP4. | — |
 | `observer/` | Geometry and pass search. No UI. | `propagation` |
 | `ui/` | React components. | all |
 
@@ -310,7 +367,9 @@ rather than mirroring the implementation.
    regime colour-coding.
 3. **Observer** — location, overhead-now, pass prediction with visibility
    filtering, sky view.
-4. **Stretch** — `WebGPUPropagator`; Space-Track ingestion for the full catalog.
+Phase 4 (`WebGPUPropagator`) is removed. Scaling to the full tracked catalog is
+no longer a phase but a configuration change: add a Space-Track credential to
+the ingestion workflow's secrets. No client code changes.
 
 Phase 2 precedes phase 3: selection is the primary interaction loop, and the
 detail panel is a prerequisite for the observer UI to have anywhere to live.
@@ -323,21 +382,53 @@ scheduled ingestion.
 
 ## Open questions
 
-1. **SGP4 verification vector format** — confirm before the plan depends on it
-   (see Testing).
-2. **Visual direction** — "visually striking" is a stated success criterion but
-   the aesthetic direction is unspecified. This is an implementation-time
-   concern for phase 1, not an architectural gap.
-3. **satellite.js throughput** — the worker count and tick rate were designed
-   with generous margin rather than measurement. A benchmark early in phase 1
-   would replace the margin with a number.
-4. **Sky view renderer** — SVG or ECharts. Deferred to phase 3.
-5. **Project name** — `apsis` is a working title.
+1. **Visual direction** — "visually striking" is a stated success criterion but
+   the aesthetic direction is unspecified. An implementation-time concern for
+   phase 1, not an architectural gap. The only open question that blocks nothing
+   but matters most to the stated goal.
+2. **Sky view renderer** — SVG or ECharts. Deferred to phase 3.
+3. **Project name** — `apsis` is a working title.
+
+*Closed in revision 2:* SGP4 verification vector format (reframed — see
+Testing); satellite.js throughput (measured — see Measured findings); whether
+cross-origin isolation is required (it is not).
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
 | Celestrak blocks or rate-limits ingestion | Build-time fetch means one request per cron run, not per visitor; last-good artifact is retained on failure |
-| SGP4 in WGSL proves impractical (deep-space branches are conditional-heavy and hostile to SIMD lanes) | Phase 4 is explicitly a stretch; the worker pool remains the shipped path |
+| Celestrak serves a 200 with a non-JSON refusal body | Ingestion validates content before writing; last-good artifact is retained on failure. Observed in practice, not hypothetical |
+| `json2satrec` startup cost (274 ms) delays interactivity | Runs in the worker, off the main thread; globe shell renders first |
 | Texture payload undermines fast first paint | Progressive 2k -> 4k load; measure against the fast-first-paint goal |
+
+## Revision history
+
+### Revision 2 — 2026-09-19
+
+Prompted by benchmarking satellite.js 7.1.0 against the real 16,578-object
+catalog before writing the implementation plan. Four of revision 1's decisions
+did not survive contact with measurement.
+
+| Removed | Why |
+|---|---|
+| Hand-rolled worker pool with slice partitioning and double-buffered transferables | Whole-catalog propagation is 11.0 ms. The pool solved a problem that does not exist. Replaced by one worker, justified by startup cost rather than tick cost. |
+| Cross-origin isolation (COOP/COEP) analysis | Only the pthreads build needs `SharedArrayBuffer`, and the single-thread build is ~50x under budget. Moot. |
+| Custom struct-of-arrays binary format and the `format/` module | Real parse cost is 19.3 ms, not the estimated ~150 ms, and it is dwarfed by 273.7 ms of `json2satrec`. Its other justification was the WebGPU seam, also removed. |
+| WebGPU phase 4 (`WebGPUPropagator`) | 18.6 ms per tick for 28k objects. No performance problem remains to solve. |
+
+| Added or strengthened | Why |
+|---|---|
+| `BulkPropagator` + WASM single-thread runtime | Ships in satellite.js; returns packed position/velocity `Float64Array`s and a per-satellite error code — exactly the renderer's input |
+| `communityDecayCheckEnabled` | Library-provided handling for decayed-object garbage. Measured: 1 bad record in 16,578 |
+| `ShadowFractionCalculator` / `sunPos` | Makes phase 3 visible-pass filtering nearly free |
+| Celestrak non-JSON refusal as an ingestion error case | Observed in practice during benchmarking, not hypothetical |
+| Pipeline-fidelity test replacing Vallado vector replay | satellite.js already verifies SGP4 upstream; our tests should cover our code |
+
+Two estimates in revision 1 were simply wrong: `JSON.parse` cost (~150 ms
+estimated, 19.3 ms actual) and the premise that catalog-scale propagation needs
+parallelism.
+
+### Revision 1 — 2026-09-19
+
+Initial design. Approved, then revised before implementation.
