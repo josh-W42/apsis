@@ -874,10 +874,20 @@ export function bucketIndex(bucket: ConstellationBucket): number {
   return BUCKETS.indexOf(bucket);
 }
 
-/** Anchored so "SUPERSTARLINKER" does not match "STARLINK". */
+/**
+ * Constellation prefixes are anchored so "SUPERSTARLINKER" does not match
+ * "STARLINK".
+ */
 const STARLINK = /^STARLINK\b/;
 const ONEWEB = /^ONEWEB\b/;
-const GNSS = /^(GPS|NAVSTAR|GLONASS|GALILEO|BEIDOU)\b/;
+
+/**
+ * GNSS is deliberately NOT anchored, only word-bounded. GLONASS and Galileo
+ * fly under other designations with the family name in a bracketed suffix —
+ * "COSMOS 2433 [GLONASS-M]", "GSAT0101 (GALILEO-PFM)". Anchoring drops 61
+ * real GNSS satellites into `other`.
+ */
+const GNSS = /\b(GPS|NAVSTAR|GLONASS|GALILEO|BEIDOU)\b/;
 
 /**
  * Bucket an object for colour-coding.
