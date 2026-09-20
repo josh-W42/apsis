@@ -45,7 +45,11 @@ export function searchCatalog(
   const q = query.trim().toUpperCase();
   if (q.length === 0) return { hits: [], totalMatches: 0, truncated: false };
 
-  const ranked: { rank: number; hit: SearchHit }[] = [];
+  // One bucket per rank, each capped at `limit`. A query can match most of
+  // the catalog, and materialising all 11,114 Starlink hits just to return
+  // 20 of them cost ~13 ms per keystroke. Bucketing keeps at most
+  // 4 * limit objects alive and removes the sort entirely.
+  const buckets: SearchHit[][] = [[], [], [], []];
   let totalMatches = 0;
 
   for (let i = 0; i < index.length; i++) {
@@ -53,15 +57,20 @@ export function searchCatalog(
     const rank = rankOf(entry, q);
     if (rank === null) continue;
     totalMatches++;
-    ranked.push({ rank, hit: { catalogIndex: i, entry } });
+    const bucket = buckets[rank]!;
+    // Catalog order is ascending NORAD id, so first-come is a stable order
+    // within a rank and later entries can be dropped outright.
+    if (bucket.length < limit) bucket.push({ catalogIndex: i, entry });
   }
 
-  // Stable within a rank: catalog order, which is ascending NORAD id.
-  ranked.sort((a, b) => a.rank - b.rank);
+  const hits: SearchHit[] = [];
+  for (const bucket of buckets) {
+    for (const hit of bucket) {
+      if (hits.length >= limit) break;
+      hits.push(hit);
+    }
+    if (hits.length >= limit) break;
+  }
 
-  return {
-    hits: ranked.slice(0, limit).map((r) => r.hit),
-    totalMatches,
-    truncated: totalMatches > limit,
-  };
+  return { hits, totalMatches, truncated: totalMatches > limit };
 }

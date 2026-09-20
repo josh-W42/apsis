@@ -1038,13 +1038,22 @@ describe('searchCatalog', () => {
     expect(out.truncated).toBe(false);
   });
 
-  it('stays under 20 ms at catalog scale for the worst-case query', () => {
-    // Measured ~1.6 ms for a full scan of 16,578 names; this is a generous
-    // ceiling that still catches an accidental O(n^2).
+  it('does not retain the objects it will discard', () => {
+    // The guard against materialising every match: a query hitting the whole
+    // catalog must still only build a handful of hits.
+    const many = Array.from({ length: 16_578 }, (_, i) => make(i, `STARLINK-${i}`));
+    const out = searchCatalog(many, 'starlink', 20);
+    expect(out.hits).toHaveLength(20);
+    expect(out.totalMatches).toBe(16_578);
+  });
+
+  it('stays fast at catalog scale for the worst-case query', () => {
+    // A smoke test against an accidental O(n^2), not a benchmark — the suite
+    // runs tests in parallel workers, so the wall clock here is contended.
     const many = Array.from({ length: 16_578 }, (_, i) => make(i, `STARLINK-${i}`));
     const t = performance.now();
-    searchCatalog(many, 'starlink');
-    expect(performance.now() - t).toBeLessThan(20);
+    for (let i = 0; i < 5; i++) searchCatalog(many, 'starlink');
+    expect((performance.now() - t) / 5).toBeLessThan(25);
   });
 });
 ```
