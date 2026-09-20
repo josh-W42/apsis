@@ -12,7 +12,7 @@ function trimOmm(record: OmmRecord): TrimmedOmm {
 }
 
 const EMPTY_META: SatcatMeta = {
-  objectType: null, owner: null, launchDate: null,
+  objectType: null, owner: null, ownerName: null, launchDate: null,
   apogeeKm: null, perigeeKm: null,
 };
 
@@ -30,12 +30,16 @@ const EMPTY_META: SatcatMeta = {
 export function joinCatalog(
   omm: OmmRecord[],
   satcat: Map<number, SatcatRow>,
+  owners: Map<string, string>,
 ): CatalogEntry[] {
   const entries: CatalogEntry[] = [];
   for (const record of omm) {
     const row = satcat.get(record.NORAD_CAT_ID);
     if (row?.decayDate) continue;
-    entries.push({ omm: trimOmm(record), meta: row?.meta ?? EMPTY_META });
+    const meta = row
+      ? { ...row.meta, ownerName: row.meta.owner ? owners.get(row.meta.owner) ?? null : null }
+      : EMPTY_META;
+    entries.push({ omm: trimOmm(record), meta });
   }
   entries.sort((a, b) => a.omm.NORAD_CAT_ID - b.omm.NORAD_CAT_ID);
   return entries;

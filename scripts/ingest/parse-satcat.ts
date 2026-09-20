@@ -61,6 +61,7 @@ export function parseSatcat(csv: string): Map<number, SatcatRow> {
       meta: {
         objectType: str(f[iType]),
         owner: str(f[iOwner]),
+        ownerName: null,   // the join supplies this; the parser cannot know it
         launchDate: str(f[iLaunch]),
         apogeeKm: num(f[iApogee]),
         perigeeKm: num(f[iPerigee]),

@@ -22,7 +22,8 @@ export interface OmmRecord {
 /** Metadata drawn from satcat.csv. Null when the object has no SATCAT row. */
 export interface SatcatMeta {
   objectType: string | null;   // PAY | R/B | DEB | UNK
-  owner: string | null;
+  owner: string | null;        // raw SATCAT code, e.g. "CIS"
+  ownerName: string | null;    // expanded, e.g. "Commonwealth of Independent States"
   launchDate: string | null;   // ISO date
   apogeeKm: number | null;
   perigeeKm: number | null;

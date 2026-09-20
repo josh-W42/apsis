@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GP_URL, SATCAT_URL, runIngest, type IngestDeps } from './ingest.ts';
+import { GP_URL, SATCAT_URL, SOURCES_URL, runIngest, type IngestDeps } from './ingest.ts';
 
 const GP = JSON.stringify([
   { OBJECT_NAME: 'ISS (ZARYA)', OBJECT_ID: '1998-067A', NORAD_CAT_ID: 25544,
@@ -16,11 +16,17 @@ const SATCAT =
   'RCS,DATA_STATUS_CODE,ORBIT_CENTER,ORBIT_TYPE\n' +
   'ISS (ZARYA),1998-067A,25544,PAY,+,ISS,1998-11-20,TTMTR,,92.8,51.64,420,410,399.05,,EA,ORB';
 
+const SOURCES = `<html><body><table><tr><th>Source</th><th>Name</th></tr>` +
+  `<tr><td>ISS</td><td>International Space Station</td></tr>` +
+  Array.from({ length: 95 }, (_, i) => `<tr><td>C${i}</td><td>Country ${i}</td></tr>`).join('') +
+  `</table></body></html>`;
+
 function deps(over: Partial<Record<string, string>> = {}): IngestDeps {
   return {
     fetchText: async (url) => {
       if (url === GP_URL) return over.gp ?? GP;
       if (url === SATCAT_URL) return over.satcat ?? SATCAT;
+      if (url === SOURCES_URL) return over.sources ?? SOURCES;
       throw new Error(`unexpected url ${url}`);
     },
     now: () => new Date('2026-09-19T12:00:00.000Z'),
@@ -46,6 +52,17 @@ describe('runIngest', () => {
     const allDecayed = SATCAT.replace(',,92.8,51.64', ',2024-01-01,92.8,51.64');
     await expect(runIngest(deps({ satcat: allDecayed })))
       .rejects.toThrow(/zero objects after/i);
+  });
+
+  it('expands owner codes into the artifact', async () => {
+    const { catalog } = await runIngest(deps());
+    expect(catalog[0]!.meta.owner).toBe('ISS');
+    expect(catalog[0]!.meta.ownerName).toBe('International Space Station');
+  });
+
+  it('fails the run when the sources page no longer parses', async () => {
+    await expect(runIngest(deps({ sources: '<html>down for maintenance</html>' })))
+      .rejects.toThrow(/owner code/i);
   });
 
   it('is deterministic — identical inputs yield an identical checksum', async () => {
