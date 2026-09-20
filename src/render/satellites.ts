@@ -3,7 +3,7 @@ import type { Frame } from '../propagation/client.ts';
 import { SCENE_SCALE } from './earth.ts';
 import { bucketIndex, classifyConstellation } from '../catalog/constellation.ts';
 import type { CatalogIndexEntry } from '../catalog/types.ts';
-import { BUCKET_COLOR_LIST } from '../ui/theme.ts';
+import { BUCKET_COLOR_LIST, BUCKET_SIZE_LIST } from '../ui/theme.ts';
 import { encodePickId } from './pick-id.ts';
 
 /** Tick interval the shader interpolates across, in seconds. */
@@ -81,6 +81,7 @@ export const HERMITE_ATTRIBUTES = /* glsl */ `
 
   attribute float bucket;
   varying float vBucket;
+  uniform float uSizeScale[5];
 `;
 
 /**
@@ -113,7 +114,9 @@ const vertexShader = /* glsl */ `
     vBucket = bucket;
     ${HERMITE_VERTEX_BODY}
     // Attenuate with distance, but keep distant GEO objects visible.
-    gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 1.0, 5.0);
+    // The per-bucket scale is how Starlink recedes without going dark.
+    float scale = uSizeScale[int(bucket + 0.5)];
+    gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 1.0, 5.0) * scale;
   }
 `;
 
@@ -185,6 +188,7 @@ export function createSatellites(
       uScale: { value: SCENE_SCALE },
       uPointSize: { value: 260 },
       uPalette: { value: BUCKET_COLOR_LIST.map((hex) => new THREE.Color(hex)) },
+      uSizeScale: { value: BUCKET_SIZE_LIST },
       uStarlinkMode: { value: MODE_VALUE.show },
       uStarlinkBucket: { value: STARLINK_BUCKET },
     },
