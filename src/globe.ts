@@ -307,6 +307,8 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
         }
         return lines;
       },
+      /** Current ECI sun direction, for verifying the lighting geometry. */
+      get sunDirection() { return sunDirectionEci(new Date()); },
       /** Camera position in scene units (earth radii), for occlusion maths. */
       get cameraPosition() {
         const c = view.camera.position;
