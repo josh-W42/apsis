@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Frame } from '../propagation/client.ts';
 import { SCENE_SCALE } from './earth.ts';
+import { encodePickId } from './pick-id.ts';
 
 /** Tick interval the shader interpolates across, in seconds. */
 export const TICK_SECONDS = 1;
@@ -24,6 +25,10 @@ export function gatherLive(
 
 export interface SatellitesHandle {
   points: THREE.Points;
+  /** Exposed so the picker can build a parallel material over the same buffers. */
+  geometry: THREE.BufferGeometry;
+  /** Shared with the picker so interpolation cannot drift between them. */
+  uniforms: Record<string, THREE.IUniform>;
   /** Promote the pending frame to current and accept a new pending frame. */
   pushFrame(frame: Frame): void;
   /** Interpolation position between the two held frames, 0..1. */
@@ -31,7 +36,11 @@ export interface SatellitesHandle {
   dispose(): void;
 }
 
-const vertexShader = /* glsl */ `
+/**
+ * Attribute and uniform declarations shared by the visible material and the
+ * picking material.
+ */
+export const HERMITE_ATTRIBUTES = /* glsl */ `
   attribute vec3 velA;
   attribute vec3 posB;
   attribute vec3 velB;
@@ -40,22 +49,36 @@ const vertexShader = /* glsl */ `
   uniform float uH;          // frame interval, seconds
   uniform float uScale;      // km -> scene units
   uniform float uPointSize;
+`;
 
+/**
+ * The Hermite position computation, shared verbatim between the visible
+ * material and the picking material. Picking against a separately written
+ * copy of this would disagree with the screen within a frame at 7.6 km/s
+ * and select the wrong satellite.
+ *
+ * Declares `mv` for the caller to use in gl_PointSize.
+ */
+export const HERMITE_VERTEX_BODY = /* glsl */ `
+  float s  = uAlpha;
+  float s2 = s * s;
+  float s3 = s2 * s;
+  float h00 =  2.0 * s3 - 3.0 * s2 + 1.0;
+  float h10 =        s3 - 2.0 * s2 + s;
+  float h01 = -2.0 * s3 + 3.0 * s2;
+  float h11 =        s3 -       s2;
+
+  vec3 p = h00 * position + h10 * uH * velA
+         + h01 * posB     + h11 * uH * velB;
+
+  vec4 mv = modelViewMatrix * vec4(p * uScale, 1.0);
+  gl_Position = projectionMatrix * mv;
+`;
+
+const vertexShader = /* glsl */ `
+  ${HERMITE_ATTRIBUTES}
   void main() {
-    // Cubic Hermite. Mirrors hermite() in src/math/hermite.ts.
-    float s  = uAlpha;
-    float s2 = s * s;
-    float s3 = s2 * s;
-    float h00 =  2.0 * s3 - 3.0 * s2 + 1.0;
-    float h10 =        s3 - 2.0 * s2 + s;
-    float h01 = -2.0 * s3 + 3.0 * s2;
-    float h11 =        s3 -       s2;
-
-    vec3 p = h00 * position + h10 * uH * velA
-           + h01 * posB     + h11 * uH * velB;
-
-    vec4 mv = modelViewMatrix * vec4(p * uScale, 1.0);
-    gl_Position = projectionMatrix * mv;
+    ${HERMITE_VERTEX_BODY}
     // Attenuate with distance, but keep distant GEO objects visible.
     gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 1.0, 5.0);
   }
@@ -91,6 +114,16 @@ export function createSatellites(liveIndices: Uint32Array): SatellitesHandle {
   geometry.setAttribute('velA', new THREE.BufferAttribute(velA, 3));
   geometry.setAttribute('posB', new THREE.BufferAttribute(posB, 3));
   geometry.setAttribute('velB', new THREE.BufferAttribute(velB, 3));
+
+  // Per-point pick id, written once — live indices never change after ready.
+  const pickColor = new Float32Array(n * 3);
+  for (let j = 0; j < n; j++) {
+    const [r, g, b] = encodePickId(j);
+    pickColor[j * 3 + 0] = r / 255;
+    pickColor[j * 3 + 1] = g / 255;
+    pickColor[j * 3 + 2] = b / 255;
+  }
+  geometry.setAttribute('pickColor', new THREE.BufferAttribute(pickColor, 3));
   // Points are scattered worldwide; a sphere of 12 Earth radii covers GEO.
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 12);
 
@@ -114,6 +147,8 @@ export function createSatellites(liveIndices: Uint32Array): SatellitesHandle {
 
   return {
     points,
+    geometry,
+    uniforms: material.uniforms,
     pushFrame(frame) {
       // Current B becomes the new A, then B takes the incoming frame.
       posA.set(posB);
