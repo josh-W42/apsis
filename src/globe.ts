@@ -1,3 +1,5 @@
+import { fetchWithRetry, isStale } from './catalog/load.ts';
+import type { Manifest } from './catalog/types.ts';
 import { createPropagationClient, type Frame } from './propagation/client.ts';
 import { sunDirectionEci } from './math/sun.ts';
 import { createScene } from './render/scene.ts';
@@ -6,7 +8,13 @@ import { alignEpoch, alphaFor, isStaleWindow, nextEpochFor } from './render/sche
 
 const TICK_MS = TICK_SECONDS * 1000;
 
-export async function startGlobe(container: HTMLElement): Promise<() => void> {
+export interface GlobeHandle {
+  stop: () => void;
+  /** ISO timestamp of the artifact when it is too old to trust, else null. */
+  staleSince: string | null;
+}
+
+export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
   const view = createScene(container);
 
   const syncSun = () => {
@@ -16,6 +24,9 @@ export async function startGlobe(container: HTMLElement): Promise<() => void> {
   };
   syncSun();
   view.frameSun(sunDirectionEci(new Date()));
+
+  const manifestResponse = await fetchWithRetry('/data/manifest.json');
+  const manifest = (await manifestResponse.json()) as Manifest;
 
   const worker = new Worker(
     new URL('./propagation/worker.ts', import.meta.url), { type: 'module' },
@@ -110,11 +121,14 @@ export async function startGlobe(container: HTMLElement): Promise<() => void> {
     };
   }
 
-  return () => {
-    clearInterval(tickTimer);
-    clearInterval(sunTimer);
-    client.dispose();
-    satellites.dispose();
-    view.dispose();
+  return {
+    stop: () => {
+      clearInterval(tickTimer);
+      clearInterval(sunTimer);
+      client.dispose();
+      satellites.dispose();
+      view.dispose();
+    },
+    staleSince: isStale(manifest, new Date()) ? manifest.generatedAt : null,
   };
 }

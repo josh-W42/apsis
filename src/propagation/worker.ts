@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { fetchWithRetry } from '../catalog/load.ts';
 import type { CatalogEntry } from '../catalog/types.ts';
 import { createPropagationCore, type PropagationCore } from './core.ts';
 import type { WorkerRequest, WorkerResponse } from './protocol.ts';
@@ -19,10 +20,8 @@ self.addEventListener('message', async (event: MessageEvent) => {
   const request = event.data as WorkerRequest;
   try {
     if (request.type === 'init') {
-      const response = await fetch(request.catalogUrl);
-      if (!response.ok) {
-        throw new Error(`catalog fetch failed: ${response.status} ${response.statusText}`);
-      }
+      // fetchWithRetry throws a descriptive error on failure.
+      const response = await fetchWithRetry(request.catalogUrl);
       const catalog = (await response.json()) as CatalogEntry[];
       if (!Array.isArray(catalog) || catalog.length === 0) {
         throw new Error('catalog artifact was empty or malformed');
