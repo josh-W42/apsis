@@ -21,7 +21,10 @@ const GEO: TrimmedOmm = {
 
 const entry = (omm: TrimmedOmm): CatalogEntry => ({
   omm,
-  meta: { objectType: null, owner: null, launchDate: null, apogeeKm: null, perigeeKm: null },
+  meta: {
+    objectType: null, owner: null, ownerName: null, launchDate: null,
+    apogeeKm: null, perigeeKm: null,
+  },
 });
 
 const CATALOG = [entry(ISS), entry(GEO)];

@@ -1,3 +1,4 @@
+import type { CatalogIndexEntry } from '../catalog/types.ts';
 import type { WorkerRequest, WorkerResponse } from './protocol.ts';
 
 export interface WorkerLike {
@@ -9,6 +10,7 @@ export interface WorkerLike {
 export interface ReadyInfo {
   count: number;
   liveIndices: Uint32Array;
+  index: CatalogIndexEntry[];
 }
 
 export interface Frame {
@@ -39,7 +41,11 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
     const message = event.data as WorkerResponse;
     switch (message.type) {
       case 'ready':
-        resolveReady?.({ count: message.count, liveIndices: message.liveIndices });
+        resolveReady?.({
+          count: message.count,
+          liveIndices: message.liveIndices,
+          index: message.index,
+        });
         break;
       case 'frame':
         for (const listener of frameListeners) {

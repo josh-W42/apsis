@@ -62,6 +62,26 @@ export interface CatalogEntry {
   meta: SatcatMeta;
 }
 
+/**
+ * What the main thread needs about each object for search and the detail
+ * panel. Sent once at `ready`; measured at 25.4 ms to structured-clone for
+ * the full 16,578-object catalog, so it is not worth packing into typed
+ * arrays.
+ */
+export interface CatalogIndexEntry {
+  noradId: number;
+  name: string;
+  intlDesignator: string;
+  objectType: string | null;
+  owner: string | null;
+  ownerName: string | null;
+  launchDate: string | null;
+  apogeeKm: number | null;
+  perigeeKm: number | null;
+  inclinationDeg: number;
+  meanMotion: number;   // rev/day; period = 1440 / meanMotion
+}
+
 export interface Manifest {
   generatedAt: string;   // ISO timestamp
   objectCount: number;

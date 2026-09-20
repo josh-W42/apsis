@@ -1,10 +1,12 @@
 /// <reference lib="webworker" />
+import { buildIndexEntry } from '../catalog/indexing.ts';
 import { fetchWithRetry } from '../catalog/load.ts';
 import type { CatalogEntry } from '../catalog/types.ts';
 import { createPropagationCore, type PropagationCore } from './core.ts';
 import type { WorkerRequest, WorkerResponse } from './protocol.ts';
 
 let core: PropagationCore | undefined;
+let catalog: CatalogEntry[] = [];
 
 const post = (message: WorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as Worker).postMessage(message, transfer);
@@ -22,14 +24,19 @@ self.addEventListener('message', async (event: MessageEvent) => {
     if (request.type === 'init') {
       // fetchWithRetry throws a descriptive error on failure.
       const response = await fetchWithRetry(request.catalogUrl);
-      const catalog = (await response.json()) as CatalogEntry[];
+      catalog = (await response.json()) as CatalogEntry[];
       if (!Array.isArray(catalog) || catalog.length === 0) {
         throw new Error('catalog artifact was empty or malformed');
       }
       core = await createPropagationCore(catalog);
       // Prime once so liveIndices is populated before the first render.
       core.tick(new Date());
-      post({ type: 'ready', count: core.count, liveIndices: core.liveIndices });
+      post({
+        type: 'ready',
+        count: core.count,
+        liveIndices: core.liveIndices,
+        index: catalog.map(buildIndexEntry),
+      });
       return;
     }
 

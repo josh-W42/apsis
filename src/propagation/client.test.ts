@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createPropagationClient, type WorkerLike } from './client.ts';
+import type { CatalogIndexEntry } from '../catalog/types.ts';
 import type { WorkerResponse } from './protocol.ts';
 
 /** A hand-written fake, injected — no module mocking. */
@@ -23,8 +24,10 @@ describe('createPropagationClient', () => {
     const ready = client.init('/data/catalog.json');
     expect(sent[0]).toEqual({ type: 'init', catalogUrl: '/data/catalog.json' });
 
-    emit({ type: 'ready', count: 3, liveIndices: Uint32Array.from([0, 2]) });
-    await expect(ready).resolves.toEqual({ count: 3, liveIndices: Uint32Array.from([0, 2]) });
+    emit({ type: 'ready', count: 3, liveIndices: Uint32Array.from([0, 2]), index: [] });
+    await expect(ready).resolves.toEqual({
+      count: 3, liveIndices: Uint32Array.from([0, 2]), index: [],
+    });
   });
 
   it('rejects init when the worker reports an error', async () => {
@@ -69,11 +72,34 @@ describe('createPropagationClient', () => {
     const { worker, emit } = fakeWorker();
     const client = createPropagationClient(worker);
     const ready = client.init('/data/catalog.json');
-    emit({ type: 'ready', count: 1, liveIndices: Uint32Array.from([0]) });
+    emit({ type: 'ready', count: 1, liveIndices: Uint32Array.from([0]), index: [] });
     await ready;
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => emit({ type: 'error', message: 'one bad tick' })).not.toThrow();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+
+const indexEntry = (noradId: number, name: string): CatalogIndexEntry => ({
+  noradId, name, intlDesignator: '1998-067A', objectType: 'PAY',
+  owner: 'ISS', ownerName: 'International Space Station',
+  launchDate: '1998-11-20', apogeeKm: 422, perigeeKm: 416,
+  inclinationDeg: 51.63, meanMotion: 15.5,
+});
+
+describe('createPropagationClient index', () => {
+  it('surfaces the catalog index from ready', async () => {
+    const { worker, emit } = fakeWorker();
+    const client = createPropagationClient(worker);
+    const ready = client.init('/data/catalog.json');
+    const index = [indexEntry(25544, 'ISS (ZARYA)'), indexEntry(44713, 'STARLINK-1007')];
+    emit({ type: 'ready', count: 2, liveIndices: Uint32Array.from([0, 1]), index });
+
+    const info = await ready;
+    expect(info.index).toHaveLength(2);
+    expect(info.index[0]!.name).toBe('ISS (ZARYA)');
+    expect(info.index[1]!.noradId).toBe(44713);
   });
 });
