@@ -398,8 +398,13 @@ detail panel is a prerequisite for the observer UI to have anywhere to live.
 ## Stack
 
 React + TypeScript + Vite + vitest, matching the existing house pattern.
-Three.js for rendering. Cloudflare Pages for hosting. GitHub Actions for
-scheduled ingestion.
+Three.js for rendering. GitHub Actions for scheduled ingestion.
+
+**Hosting is Firebase Hosting** (project `apsis-globe`, served at
+https://apsis-globe.web.app), chosen over Cloudflare Pages because the
+author already uses Firebase elsewhere. Nothing in the design depends on the
+host: it serves a static `dist/`, and the cache headers that were written as
+a Cloudflare `_headers` file now live in `firebase.json`.
 
 ## Open questions
 
