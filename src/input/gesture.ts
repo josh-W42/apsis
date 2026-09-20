@@ -12,7 +12,11 @@ export interface PointerSample {
   t: number;
 }
 
-/** How far the pointer may move and still count as a click, in CSS pixels. */
+/**
+ * Default slop, in CSS pixels, for a fine pointer.
+ *
+ * Touch needs a larger value — see clickSlopCss() in pointer-profile.ts.
+ */
 export const CLICK_SLOP_CSS = 4;
 
 /**
@@ -24,7 +28,8 @@ export const CLICK_SLOP_CSS = 4;
  */
 export function isClickGesture(
   down: PointerSample, up: PointerSample, travelled = 0,
+  slop: number = CLICK_SLOP_CSS,
 ): boolean {
-  if (travelled > CLICK_SLOP_CSS) return false;
-  return Math.hypot(up.x - down.x, up.y - down.y) <= CLICK_SLOP_CSS;
+  if (travelled > slop) return false;
+  return Math.hypot(up.x - down.x, up.y - down.y) <= slop;
 }

@@ -5,6 +5,9 @@ import { startGlobe, type GlobeHandle, type Selection } from './globe.ts';
 import type { LiveState } from './math/geodetic.ts';
 import type { StarlinkMode } from './render/satellites.ts';
 import { ConstellationLegend } from './ui/ConstellationLegend.tsx';
+import { DrawerToggle } from './ui/DrawerToggle.tsx';
+import { MobileCard } from './ui/MobileCard.tsx';
+import { useIsNarrow } from './ui/useLayoutMode.ts';
 import { DetailPanel } from './ui/DetailPanel.tsx';
 import type { TrackingStatus } from './ui/format.ts';
 import { Rail } from './ui/Rail.tsx';
@@ -25,6 +28,9 @@ export function App() {
   const [live, setLive] = useState<LiveState | null>(null);
   const [starlinkMode, setStarlinkMode] = useState<StarlinkMode>('show');
   const [follow, setFollow] = useState(false);
+  const narrow = useIsNarrow();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [cardExpanded, setCardExpanded] = useState(false);
 
   useEffect(() => {
     const container = ref.current;
@@ -43,10 +49,23 @@ export function App() {
         handle.onSelection(setSelected);
         handle.onLiveState(setLive);
         handle.onFollowChange(setFollow);
+        // Install the dev probe for the instance we actually keep. Doing it
+        // inside startGlobe let StrictMode's discarded first globe win the
+        // global and report zeros for everything.
+        if (import.meta.env.DEV && handle.debug) {
+          (globalThis as unknown as Record<string, unknown>).__apsis = handle.debug;
+        }
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 
-    return () => { cancelled = true; globeRef.current = null; teardown?.(); };
+    return () => {
+      cancelled = true;
+      globeRef.current = null;
+      if (import.meta.env.DEV) {
+        delete (globalThis as unknown as Record<string, unknown>).__apsis;
+      }
+      teardown?.();
+    };
   }, []);
 
   const outcome = useMemo(() => searchCatalog(index, query), [index, query]);
@@ -58,9 +77,15 @@ export function App() {
 
   return (
     <>
-      <div ref={ref} style={{ position: 'absolute', inset: 0, left: theme.railWidth }} />
+      <div
+        ref={ref}
+        style={{ position: 'absolute', inset: 0, left: narrow ? 0 : theme.railWidth }}
+      />
+      {narrow && (
+        <DrawerToggle open={drawerOpen} onToggle={() => setDrawerOpen((v) => !v)} />
+      )}
       {staleSince && <StaleBanner generatedAt={staleSince} />}
-      <Rail>
+      <Rail drawer={narrow} open={!narrow || drawerOpen}>
         <SearchField value={query} onChange={setQuery} />
         <ResultList
           outcome={outcome}
@@ -71,29 +96,48 @@ export function App() {
             // Clicking a dot on the globe does not, since you are already
             // looking at where it is.
             globeRef.current?.setFollow(true);
+            // On a phone the drawer covers the globe, so get out of the way
+            // of the thing the user just asked to see.
+            if (narrow) setDrawerOpen(false);
           }}
         />
-        {entry
-          ? (
-            <DetailPanel
-              entry={entry} live={live} status={status}
-              follow={follow}
-              onFollowChange={(f) => globeRef.current?.setFollow(f)}
-            />
-          )
-          : (
-            <div style={{
-              padding: 12, font: `11px ${theme.mono}`, color: theme.labelDim, lineHeight: 1.7,
-            }}>
-              {index.length.toLocaleString('en-US')} objects tracked.<br />
-              Click a satellite or search by name.
-            </div>
-          )}
-        <ConstellationLegend
-          mode={starlinkMode}
-          onModeChange={(m) => { setStarlinkMode(m); globeRef.current?.setStarlinkMode(m); }}
-        />
+        {/* On narrow screens the detail moves to the bottom card. */}
+        {!narrow && entry && (
+          <DetailPanel
+            entry={entry} live={live} status={status}
+            follow={follow}
+            onFollowChange={(f) => globeRef.current?.setFollow(f)}
+          />
+        )}
+        {!narrow && !entry && (
+          <div style={{
+            padding: 12, font: `11px ${theme.mono}`, color: theme.labelDim, lineHeight: 1.7,
+          }}>
+            {index.length.toLocaleString('en-US')} objects tracked.<br />
+            Click a satellite or search by name.
+          </div>
+        )}
+        <div style={{ marginTop: 'auto' }}>
+          <ConstellationLegend
+            mode={starlinkMode}
+            onModeChange={(m) => { setStarlinkMode(m); globeRef.current?.setStarlinkMode(m); }}
+          />
+        </div>
       </Rail>
+
+      {narrow && entry && (
+        <MobileCard
+          entry={entry} live={live} status={status}
+          expanded={cardExpanded}
+          onToggleExpanded={() => setCardExpanded((v) => !v)}
+        >
+          <DetailPanel
+            entry={entry} live={live} status={status}
+            follow={follow}
+            onFollowChange={(f) => globeRef.current?.setFollow(f)}
+          />
+        </MobileCard>
+      )}
       {error && (
         <div style={{
           position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',

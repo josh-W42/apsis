@@ -2,6 +2,9 @@ import { buildReverseMap, catalogIndexFromLive, liveIndexFromCatalog } from './c
 import { fetchWithRetry, isStale } from './catalog/load.ts';
 import type { CatalogIndexEntry, Manifest } from './catalog/types.ts';
 import { isClickGesture, type PointerSample } from './input/gesture.ts';
+import {
+  clickSlopCss, detectPointerProfile, pickRadiusCss,
+} from './input/pointer-profile.ts';
 import { liveState, type LiveState } from './math/geodetic.ts';
 import { createPicker } from './render/picking.ts';
 import { createThrottle } from './ui/throttle.ts';
@@ -42,6 +45,8 @@ export interface GlobeHandle {
   /** Keep the camera locked on the selected satellite as it moves. */
   setFollow(follow: boolean): void;
   onFollowChange(listener: (follow: boolean) => void): void;
+  /** Dev-only verification surface; undefined in production builds. */
+  debug?: Record<string, unknown>;
 }
 
 export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
@@ -176,12 +181,21 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     trail.set(t);
   });
 
+  // Aiming tolerance follows the pointer, not the viewport: a touch laptop
+  // needs big targets at desktop width, and a narrow desktop window does
+  // not need them at all.
+  const pointerProfile = detectPointerProfile(
+    typeof window !== 'undefined' ? (q) => window.matchMedia(q) : undefined,
+  );
+  const clickSlop = clickSlopCss(pointerProfile);
+
   const picker = createPicker({
     renderer: view.renderer,
     camera: view.camera,
     geometry: satellites.geometry,
     uniforms: satellites.uniforms,
   });
+  picker.setRadiusCss(pickRadiusCss(pointerProfile));
 
   // Pointer down/up rather than click: a drag on the canvas still fires a
   // click on release, so the old listener read every camera rotation as a
@@ -208,7 +222,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     lastMove = null;
     if (!down) return;
     const up = { x: event.clientX, y: event.clientY, t: event.timeStamp };
-    if (!isClickGesture(down, up, travelled)) return;
+    if (!isClickGesture(down, up, travelled, clickSlop)) return;
 
     const rect = view.canvas.getBoundingClientRect();
     const liveIndex = picker.pick(up.x - rect.left, up.y - rect.top);
@@ -259,11 +273,17 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     });
   });
 
-  if (import.meta.env.DEV) {
-    // Dev-only probe. The whole point of the Hermite design is that the GPU
-    // interpolates between 1 Hz ticks, and that is not something a screenshot
-    // can show — so expose enough state to verify it.
-    (globalThis as unknown as Record<string, unknown>).__apsis = {
+  // Dev-only probe. The whole point of the Hermite design is that the GPU
+  // interpolates between 1 Hz ticks, and that is not something a screenshot
+  // can show — so expose enough state to verify it.
+  //
+  // It is returned on the handle rather than assigned to a global here:
+  // StrictMode double-invokes the effect, so two globes exist briefly and
+  // whichever resolved last would win the global — often the torn-down one,
+  // making every reading through it silently wrong. App installs the probe
+  // for the instance it actually keeps.
+  const debug = import.meta.env.DEV
+    ? {
       get alpha() { return alpha; },
       get framesRendered() { return framesRendered; },
       get epochs() { return { epochA, epochB }; },
@@ -366,10 +386,11 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
           b: [b.getX(0), b.getY(0), b.getZ(0)],
         };
       },
-    };
-  }
+    }
+    : undefined;
 
   return {
+    debug,
     stop: () => {
       clearInterval(tickTimer);
       clearInterval(sunTimer);

@@ -14,6 +14,8 @@ export interface PickerDeps {
 export interface PickerHandle {
   /** CSS pixel coordinates relative to the canvas. Null when nothing is hit. */
   pick(cssX: number, cssY: number): number | null;
+  /** Widen or narrow the cursor tolerance — touch needs far more than a mouse. */
+  setRadiusCss(radiusCss: number): void;
   dispose(): void;
 }
 
@@ -88,12 +90,13 @@ export function createPicker(deps: PickerDeps): PickerHandle {
   // Readback window, sized so the cursor tolerance is PICK_RADIUS_CSS
   // regardless of device pixel ratio. Rebuilt only when the ratio changes.
   let windowSize = 0;
+  let radiusCss = PICK_RADIUS_CSS;
   let target: THREE.WebGLRenderTarget | null = null;
   let pixels = new Uint8Array(0);
   const size = new THREE.Vector2();
 
   function ensureWindow(dpr: number) {
-    const wanted = Math.max(1, Math.round(PICK_RADIUS_CSS * dpr) * 2 + 1);
+    const wanted = Math.max(1, Math.round(radiusCss * dpr) * 2 + 1);
     if (wanted === windowSize && target) return;
     target?.dispose();
     windowSize = wanted;
@@ -138,6 +141,9 @@ export function createPicker(deps: PickerDeps): PickerHandle {
       renderer.setClearColor(0x05070d, 1);
 
       return nearestHitInWindow(pixels, windowSize);
+    },
+    setRadiusCss(next) {
+      radiusCss = next;   // ensureWindow rebuilds the target on the next pick
     },
     dispose() {
       material.dispose();
