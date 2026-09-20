@@ -15,7 +15,7 @@
 - **Package manager is pnpm, not npm and not bun.** Two independent reasons:
   - npm 11.2.0 crashes with `Cannot read properties of null (reading 'edgesOut')` while resolving vitest 4 or 5's peer set. Reproduced in a clean directory; it is an npm arborist bug, not a package problem. pnpm resolves the same tree without complaint.
   - Local Node is `x64` (Rosetta). An arm64 bun installing arm64 native binaries against an x64 Node breaks rollup/esbuild. pnpm installs `darwin-x64` binaries matching the running Node — verified.
-- **pnpm is 6.11.0** (the version installed on this machine). `corepack use pnpm@latest` was attempted and failed with `MODULE_NOT_FOUND`, so there is no `packageManager` field. Upgrading pnpm is a worthwhile follow-up but is not a phase-1 blocker.
+- **pnpm is pinned to 6.11.0** via `packageManager` in package.json, resolved by corepack. The machine's only `pnpm` was a stale corepack shim from a Node v17.7.1 install; `corepack enable` under the active Node 23 plus the pin makes it work from any shell. 6.11.0 specifically because the lockfile is `lockfileVersion: 5.3` — a modern pnpm rewrites it wholesale. Upgrading pnpm is a worthwhile follow-up, done as its own change so the lockfile churn is reviewable on its own.
 - **Node ≥23** — the ingestion scripts are `.ts` run directly by `node` via native type stripping. Verified on v23.10.0. If CI Node is older, add `tsx` and run through it.
 - **No `vi.mock`.** All seams are dependency injection: functions take their collaborators as arguments. This is a hard constraint, not a style preference.
 - **Scope test commands to explicit paths.** A bare runner will pull in sibling workspace packages.

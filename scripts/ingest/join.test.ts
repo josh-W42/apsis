@@ -14,42 +14,44 @@ function omm(id: number, name = `SAT-${id}`): OmmRecord {
   };
 }
 const row = (decayDate: string | null): SatcatRow => ({
-  meta: { objectType: 'PAY', owner: 'US', launchDate: '2020-01-01',
-          apogeeKm: 500, perigeeKm: 490 },
+  meta: { objectType: 'PAY', owner: 'US', ownerName: null,
+          launchDate: '2020-01-01', apogeeKm: 500, perigeeKm: 490 },
   decayDate,
 });
 
+const OWNERS = new Map([['US', 'United States']]);
+
 describe('joinCatalog', () => {
   it('attaches SATCAT metadata by NORAD id', () => {
-    const out = joinCatalog([omm(1)], new Map([[1, row(null)]]));
+    const out = joinCatalog([omm(1)], new Map([[1, row(null)]]), OWNERS);
     expect(out).toHaveLength(1);
     expect(out[0]!.meta.owner).toBe('US');
   });
 
   it('drops objects with a decay date', () => {
     const out = joinCatalog([omm(1), omm(2)],
-      new Map([[1, row('2024-01-01')], [2, row(null)]]));
+      new Map([[1, row('2024-01-01')], [2, row(null)]]), OWNERS);
     expect(out.map((e) => e.omm.NORAD_CAT_ID)).toEqual([2]);
   });
 
   it('keeps GP records absent from SATCAT, with null metadata', () => {
-    const out = joinCatalog([omm(7)], new Map());
+    const out = joinCatalog([omm(7)], new Map(), OWNERS);
     expect(out).toHaveLength(1);
     expect(out[0]!.meta).toEqual({
-      objectType: null, owner: null, launchDate: null,
+      objectType: null, owner: null, ownerName: null, launchDate: null,
       apogeeKm: null, perigeeKm: null,
     });
   });
 
   it('is deterministic — output is sorted by NORAD id', () => {
-    const out = joinCatalog([omm(30), omm(2), omm(11)], new Map());
+    const out = joinCatalog([omm(30), omm(2), omm(11)], new Map(), OWNERS);
     expect(out.map((e) => e.omm.NORAD_CAT_ID)).toEqual([2, 11, 30]);
   });
 });
 
 describe('joinCatalog trimming', () => {
   it('drops OMM fields nothing downstream reads', () => {
-    const out = joinCatalog([omm(1)], new Map());
+    const out = joinCatalog([omm(1)], new Map(), OWNERS);
     const keys = Object.keys(out[0]!.omm);
     for (const dead of ['EPHEMERIS_TYPE', 'CLASSIFICATION_TYPE',
                         'REV_AT_EPOCH']) {
@@ -58,7 +60,7 @@ describe('joinCatalog trimming', () => {
   });
 
   it('keeps every field json2satrec reads, plus name and id', () => {
-    const out = joinCatalog([omm(1)], new Map());
+    const out = joinCatalog([omm(1)], new Map(), OWNERS);
     const keys = Object.keys(out[0]!.omm);
     for (const required of [
       'NORAD_CAT_ID', 'EPOCH', 'MEAN_MOTION', 'ECCENTRICITY', 'INCLINATION',
@@ -68,5 +70,30 @@ describe('joinCatalog trimming', () => {
     ]) {
       expect(keys).toContain(required);
     }
+  });
+});
+
+
+describe('joinCatalog owner expansion', () => {
+  it('expands a known owner code', () => {
+    const out = joinCatalog([omm(1)], new Map([[1, row(null)]]), OWNERS);
+    expect(out[0]!.meta.owner).toBe('US');
+    expect(out[0]!.meta.ownerName).toBe('United States');
+  });
+
+  it('leaves ownerName null for an unrecognised code rather than guessing', () => {
+    const base = row(null);
+    const unknown: SatcatRow = {
+      ...base,
+      meta: { ...base.meta, owner: 'ZZZ', ownerName: null },
+    };
+    const out = joinCatalog([omm(1)], new Map([[1, unknown]]), OWNERS);
+    expect(out[0]!.meta.owner).toBe('ZZZ');
+    expect(out[0]!.meta.ownerName).toBeNull();
+  });
+
+  it('leaves ownerName null when the object has no SATCAT row', () => {
+    const out = joinCatalog([omm(9)], new Map(), OWNERS);
+    expect(out[0]!.meta.ownerName).toBeNull();
   });
 });

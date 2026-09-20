@@ -1,17 +1,47 @@
+import { buildReverseMap, catalogIndexFromLive, liveIndexFromCatalog } from './catalog/indexing.ts';
 import { fetchWithRetry, isStale } from './catalog/load.ts';
-import type { Manifest } from './catalog/types.ts';
+import type { CatalogIndexEntry, Manifest } from './catalog/types.ts';
+import { isClickGesture, type PointerSample } from './input/gesture.ts';
+import { liveState, type LiveState } from './math/geodetic.ts';
+import { createPicker } from './render/picking.ts';
+import { createThrottle } from './ui/throttle.ts';
+import { Vector3 } from 'three';
 import { createPropagationClient, type Frame } from './propagation/client.ts';
 import { sunDirectionEci } from './math/sun.ts';
 import { createScene } from './render/scene.ts';
-import { createSatellites, TICK_SECONDS } from './render/satellites.ts';
+import { SCENE_SCALE } from './render/earth.ts';
+import {
+  buildBucketAttribute, createSatellites, TICK_SECONDS, type StarlinkMode,
+} from './render/satellites.ts';
+import { createTrail } from './render/trail.ts';
 import { alignEpoch, alphaFor, isStaleWindow, nextEpochFor } from './render/schedule.ts';
 
 const TICK_MS = TICK_SECONDS * 1000;
+
+export interface Selection {
+  catalogIndex: number;
+  /**
+   * False when SGP4 gave this object a non-zero error byte. It is still
+   * searchable and still shown, but it has no trustworthy position — so no
+   * dot, no trail, and no live values.
+   */
+  renderable: boolean;
+}
 
 export interface GlobeHandle {
   stop: () => void;
   /** ISO timestamp of the artifact when it is too old to trust, else null. */
   staleSince: string | null;
+  index: CatalogIndexEntry[];
+  /** Select by catalog index, or null to clear. */
+  select(catalogIndex: number | null): void;
+  onSelection(listener: (selection: Selection | null) => void): void;
+  /** Throttled to 4 Hz. Null when nothing selected, or when not renderable. */
+  onLiveState(listener: (state: LiveState | null) => void): void;
+  setStarlinkMode(mode: StarlinkMode): void;
+  /** Keep the camera locked on the selected satellite as it moves. */
+  setFollow(follow: boolean): void;
+  onFollowChange(listener: (follow: boolean) => void): void;
 }
 
 export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
@@ -33,13 +63,58 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
   );
   const client = createPropagationClient(worker);
 
-  const { count, liveIndices } = await client.init('/data/catalog.json');
+  const { count, liveIndices, index } = await client.init('/data/catalog.json');
+
+  const excluded: number[] = [];
+  {
+    const live = new Set(liveIndices);
+    for (let i = 0; i < count; i++) if (!live.has(i)) excluded.push(index[i]!.noradId);
+  }
   console.info(
-    `[apsis] ${liveIndices.length} of ${count} objects renderable ` +
-    `(${count - liveIndices.length} excluded by SGP4 error or decay)`,
+    `[apsis] ${liveIndices.length} of ${count} objects renderable` +
+    (excluded.length ? ` — excluded NORAD ${excluded.join(', ')}` : ''),
   );
 
-  const satellites = createSatellites(liveIndices);
+  const reverseMap = buildReverseMap(liveIndices, count);
+  let selected: Selection | null = null;
+  const selectionListeners: ((s: Selection | null) => void)[] = [];
+  const liveStateListeners: ((s: LiveState | null) => void)[] = [];
+  let latestFrame: Frame | null = null;
+  let follow = false;
+  const followListeners: ((f: boolean) => void)[] = [];
+
+  const setFollow = (next: boolean) => {
+    if (next === follow) return;
+    follow = next;
+    if (!follow) view.setFollowTarget(null);
+    for (const l of followListeners) l(follow);
+  };
+
+  const setSelection = (catalogIndex: number | null) => {
+    if (catalogIndex === (selected?.catalogIndex ?? null)) return;
+
+    if (catalogIndex === null) {
+      selected = null;
+    } else {
+      // Objects excluded by a non-zero SGP4 error are still in the index and
+      // still findable by search, so they must be selectable — otherwise
+      // their search result is a dead row that silently does nothing. They
+      // are shown with an ERROR badge and no live values instead.
+      const renderable = liveIndexFromCatalog(reverseMap, catalogIndex) !== null;
+      selected = { catalogIndex, renderable };
+    }
+
+    for (const l of selectionListeners) l(selected);
+    if (selected === null || !selected.renderable) {
+      for (const l of liveStateListeners) l(null);
+      trail.clear();
+      setFollow(false);
+    } else {
+      client.requestTrail(selected.catalogIndex);
+    }
+  };
+
+  const satellites = createSatellites(liveIndices, buildBucketAttribute(index, liveIndices));
   view.scene.add(satellites.points);
 
   // epochA/epochB bracket the interval the shader interpolates across.
@@ -47,6 +122,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
   let epochB = 0;
 
   client.onFrame((frame: Frame) => {
+    latestFrame = frame;
     // A backgrounded tab throttles timers, so on resume the previous epoch
     // can be far in the past. Re-prime rather than interpolating across a
     // gap of unknown size.
@@ -93,12 +169,94 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
 
   const sunTimer = setInterval(syncSun, 1_000);
 
+  const trail = createTrail(view.scene, view.spinGroup);
+  client.onTrail((t) => {
+    // A trail that arrived after the selection changed is stale.
+    if (t.catalogIndex !== selected?.catalogIndex) return;
+    trail.set(t);
+  });
+
+  const picker = createPicker({
+    renderer: view.renderer,
+    camera: view.camera,
+    geometry: satellites.geometry,
+    uniforms: satellites.uniforms,
+  });
+
+  // Pointer down/up rather than click: a drag on the canvas still fires a
+  // click on release, so the old listener read every camera rotation as a
+  // click on empty space and cleared the selection.
+  let pressed: PointerSample | null = null;
+  let travelled = 0;
+  let lastMove: PointerSample | null = null;
+
+  const onPointerDown = (event: PointerEvent) => {
+    pressed = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+    lastMove = pressed;
+    travelled = 0;
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pressed || !lastMove) return;
+    travelled += Math.hypot(event.clientX - lastMove.x, event.clientY - lastMove.y);
+    lastMove = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    const down = pressed;
+    pressed = null;
+    lastMove = null;
+    if (!down) return;
+    const up = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+    if (!isClickGesture(down, up, travelled)) return;
+
+    const rect = view.canvas.getBoundingClientRect();
+    const liveIndex = picker.pick(up.x - rect.left, up.y - rect.top);
+    setSelection(liveIndex === null ? null : catalogIndexFromLive(liveIndices, liveIndex));
+  };
+
+  const onPointerCancel = () => { pressed = null; lastMove = null; };
+
+  view.canvas.addEventListener('pointerdown', onPointerDown);
+  view.canvas.addEventListener('pointermove', onPointerMove);
+  view.canvas.addEventListener('pointerup', onPointerUp);
+  view.canvas.addEventListener('pointercancel', onPointerCancel);
+
+  const pumpLiveState = createThrottle(250);
   let alpha = 0;
   let framesRendered = 0;
   view.onFrame(() => {
     framesRendered++;
     alpha = alphaFor(Date.now(), epochA, epochB);
     satellites.setAlpha(alpha);
+
+    if (follow && selected?.renderable && latestFrame) {
+      // Track the rendered (Hermite-interpolated) position, not the raw
+      // tick position, or the camera lags the dot by up to a full second.
+      const j = liveIndexFromCatalog(reverseMap, selected.catalogIndex);
+      if (j !== null) {
+        const attr = satellites.points.geometry.getAttribute('position');
+        const b = satellites.points.geometry.getAttribute('posB');
+        const t = alpha;
+        view.setFollowTarget({
+          x: (attr.getX(j) * (1 - t) + b.getX(j) * t) * SCENE_SCALE,
+          y: (attr.getY(j) * (1 - t) + b.getY(j) * t) * SCENE_SCALE,
+          z: (attr.getZ(j) * (1 - t) + b.getZ(j) * t) * SCENE_SCALE,
+        });
+      }
+    }
+
+    pumpLiveState(() => {
+      if (selected === null || !selected.renderable || latestFrame === null) return;
+      const i = selected.catalogIndex;
+      const { positions, velocities } = latestFrame;
+      const s = liveState(
+        { x: positions[i * 3]!, y: positions[i * 3 + 1]!, z: positions[i * 3 + 2]! },
+        { x: velocities[i * 3]!, y: velocities[i * 3 + 1]!, z: velocities[i * 3 + 2]! },
+        new Date(),
+      );
+      for (const l of liveStateListeners) l(s);
+    });
   });
 
   if (import.meta.env.DEV) {
@@ -110,6 +268,94 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
       get framesRendered() { return framesRendered; },
       get epochs() { return { epochA, epochB }; },
       get renderable() { return liveIndices.length; },
+      get selected() { return selected; },
+      /** Bucket distribution actually uploaded to the GPU, for verification. */
+      bucketHistogram() {
+        const attr = satellites.points.geometry.getAttribute('bucket');
+        const h: Record<number, number> = {};
+        for (let i = 0; i < attr.count; i++) {
+          const b = Math.round(attr.getX(i));
+          h[b] = (h[b] ?? 0) + 1;
+        }
+        return h;
+      },
+      get starlinkMode() {
+        return satellites.uniforms.uStarlinkMode?.value as number;
+      },
+      /** Trail + ground-track state, for verification. */
+      trailInfo() {
+        const lines: Record<string, unknown>[] = [];
+        for (const [name, parent] of [['trail', view.scene], ['track', view.spinGroup]] as const) {
+          for (const child of parent.children) {
+            if (!(child as { isLine?: boolean }).isLine) continue;
+            const attr = (child as unknown as { geometry: { getAttribute(n: string): {
+              count: number; getX(i: number): number; getY(i: number): number; getZ(i: number): number;
+            } | undefined } }).geometry.getAttribute('position');
+            if (!attr) { lines.push({ name, visible: (child as { visible: boolean }).visible, vertices: 0 }); continue; }
+            let minR = Infinity, maxR = -Infinity;
+            for (let i = 0; i < attr.count; i++) {
+              const r = Math.hypot(attr.getX(i), attr.getY(i), attr.getZ(i));
+              if (r < minR) minR = r;
+              if (r > maxR) maxR = r;
+            }
+            lines.push({
+              name, visible: (child as { visible: boolean }).visible,
+              vertices: attr.count,
+              radiusMin: +minR.toFixed(4), radiusMax: +maxR.toFixed(4),
+            });
+          }
+        }
+        return lines;
+      },
+      /** Camera position in scene units (earth radii), for occlusion maths. */
+      get cameraPosition() {
+        const c = view.camera.position;
+        return { x: c.x, y: c.y, z: c.z };
+      },
+      /** Rendered position of a live index in scene units (earth radii). */
+      renderedPosition(liveIndex: number) {
+        const attr = satellites.points.geometry.getAttribute('position');
+        return {
+          x: attr.getX(liveIndex) * SCENE_SCALE,
+          y: attr.getY(liveIndex) * SCENE_SCALE,
+          z: attr.getZ(liveIndex) * SCENE_SCALE,
+        };
+      },
+      /** Run the GPU pick at canvas-relative CSS coordinates. */
+      pickAt(x: number, y: number) { return picker.pick(x, y); },
+      /**
+       * Project the ACTUALLY RENDERED position of a live index — the A
+       * endpoint in the geometry buffer — to canvas CSS coordinates. This is
+       * what the shader draws at alpha 0, so it is the right thing to compare
+       * a pick against.
+       */
+      projectRendered(liveIndex: number) {
+        const attr = satellites.points.geometry.getAttribute('position');
+        const v = new Vector3(attr.getX(liveIndex), attr.getY(liveIndex), attr.getZ(liveIndex))
+          .multiplyScalar(SCENE_SCALE).project(view.camera);
+        const rect = view.canvas.getBoundingClientRect();
+        return {
+          x: (v.x * 0.5 + 0.5) * rect.width,
+          y: (-v.y * 0.5 + 0.5) * rect.height,
+          inFront: v.z < 1,
+        };
+      },
+      /** Project a catalog index to canvas-relative CSS coordinates. */
+      project(catalogIndex: number) {
+        if (latestFrame === null) return null;
+        const { positions } = latestFrame;
+        const v = new Vector3(
+          positions[catalogIndex * 3]!,
+          positions[catalogIndex * 3 + 1]!,
+          positions[catalogIndex * 3 + 2]!,
+        ).multiplyScalar(SCENE_SCALE).project(view.camera);
+        const rect = view.canvas.getBoundingClientRect();
+        return {
+          x: (v.x * 0.5 + 0.5) * rect.width,
+          y: (-v.y * 0.5 + 0.5) * rect.height,
+          inFront: v.z < 1,
+        };
+      },
       firstPosition() {
         const a = satellites.points.geometry.getAttribute('position');
         const b = satellites.points.geometry.getAttribute('posB');
@@ -125,10 +371,23 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     stop: () => {
       clearInterval(tickTimer);
       clearInterval(sunTimer);
+      view.canvas.removeEventListener('pointerdown', onPointerDown);
+      view.canvas.removeEventListener('pointermove', onPointerMove);
+      view.canvas.removeEventListener('pointerup', onPointerUp);
+      view.canvas.removeEventListener('pointercancel', onPointerCancel);
+      picker.dispose();
+      trail.dispose();
       client.dispose();
       satellites.dispose();
       view.dispose();
     },
+    index,
+    select: setSelection,
+    onSelection(listener) { selectionListeners.push(listener); },
+    onLiveState(listener) { liveStateListeners.push(listener); },
+    setStarlinkMode: satellites.setStarlinkMode,
+    setFollow,
+    onFollowChange(listener) { followListeners.push(listener); },
     staleSince: isStale(manifest, new Date()) ? manifest.generatedAt : null,
   };
 }

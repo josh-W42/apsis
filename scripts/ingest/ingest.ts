@@ -3,6 +3,9 @@ import { IngestError, type CatalogEntry, type Manifest } from '../../src/catalog
 import { joinCatalog } from './join.ts';
 import { parseGpResponse } from './parse-gp.ts';
 import { parseSatcat } from './parse-satcat.ts';
+import { SOURCES_URL, parseSources } from './parse-sources.ts';
+
+export { SOURCES_URL } from './parse-sources.ts';
 
 export const GP_URL =
   'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json';
@@ -25,14 +28,16 @@ export interface IngestResult {
  * without module mocking.
  */
 export async function runIngest(deps: IngestDeps): Promise<IngestResult> {
-  const [gpBody, satcatBody] = await Promise.all([
+  const [gpBody, satcatBody, sourcesBody] = await Promise.all([
     deps.fetchText(GP_URL),
     deps.fetchText(SATCAT_URL),
+    deps.fetchText(SOURCES_URL),
   ]);
 
   const omm = parseGpResponse(gpBody);
   const satcat = parseSatcat(satcatBody);
-  const catalog = joinCatalog(omm, satcat);
+  const owners = parseSources(sourcesBody);
+  const catalog = joinCatalog(omm, satcat, owners);
 
   if (catalog.length === 0) {
     throw new IngestError(

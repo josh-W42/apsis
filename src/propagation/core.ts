@@ -3,7 +3,9 @@ import {
   EciBaseCalculator,
   createSingleThreadRuntime,
   json2satrec,
+  propagate,
 } from 'satellite.js';
+import { periodMinutes } from '../math/geodetic.ts';
 import type { CatalogEntry } from '../catalog/types.ts';
 
 /**
@@ -33,11 +35,21 @@ export interface PropagationFrame {
   epochMs: number;
 }
 
+export interface TrailSeries {
+  /** ECI km, packed [x,y,z] per sample. */
+  samples: Float32Array;
+  /** Wall-clock epoch of each sample, parallel to `samples`. */
+  epochMs: Float64Array;
+  periodMinutes: number;
+}
+
 export interface PropagationCore {
   readonly count: number;
   /** Catalog indices whose SGP4 error byte was zero. Only these may render. */
   readonly liveIndices: Uint32Array;
   tick(date: Date): PropagationFrame;
+  /** Sample one satellite across a full orbital period, for trail drawing. */
+  series(catalogIndex: number, startMs: number, sampleCount: number): TrailSeries | null;
   dispose(): void;
 }
 
@@ -96,6 +108,28 @@ export async function createPropagationCore(
         velocities: out.velocity,
         epochMs: date.getTime(),
       };
+    },
+    series(catalogIndex, startMs, sampleCount) {
+      const satrec = satrecs[catalogIndex];
+      const record = catalog[catalogIndex];
+      if (!satrec || !record) return null;
+
+      const period = periodMinutes(record.omm.MEAN_MOTION);
+      const stepMs = (period * 60_000) / (sampleCount - 1);
+
+      const samples = new Float32Array(sampleCount * 3);
+      const epochMs = new Float64Array(sampleCount);
+
+      for (let i = 0; i < sampleCount; i++) {
+        const t = startMs + i * stepMs;
+        epochMs[i] = t;
+        const pv = propagate(satrec, new Date(t));
+        if (pv === null) continue;   // leave a zero; the renderer skips it
+        samples[i * 3 + 0] = pv.position.x;
+        samples[i * 3 + 1] = pv.position.y;
+        samples[i * 3 + 2] = pv.position.z;
+      }
+      return { samples, epochMs, periodMinutes: period };
     },
     dispose() {
       // Only the propagator. See the note on sharedRuntime above.

@@ -7,6 +7,8 @@ export const SCENE_SCALE = 1 / EARTH_RADIUS_KM;
 
 export interface EarthHandle {
   group: THREE.Group;
+  /** Rotates with GMST. Ground tracks belong here so they stay over their geography. */
+  spinGroup: THREE.Group;
   setSunDirection(d: { x: number; y: number; z: number }): void;
   /** Align the globe's geography to the ECI frame for this instant. */
   setTime(date: Date): void;
@@ -80,6 +82,7 @@ export function createEarth(): EarthHandle {
 
   return {
     group,
+    spinGroup: spin,
     setSunDirection(d) {
       sunDirection.set(d.x, d.y, d.z).normalize();
       sunLight.position.copy(sunDirection).multiplyScalar(10);

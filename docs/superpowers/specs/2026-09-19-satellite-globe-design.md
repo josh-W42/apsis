@@ -50,8 +50,11 @@ Consequences, all favourable:
 
 - Time scrubbing UI (deferred; the machinery is ~90% built by pass prediction,
   so it stays cheap to add later)
-- Rich filtering and grouping (deferred; minimal regime colour-coding ships
-  instead, see Rendering)
+- Rich filtering and grouping (deferred; constellation colour-coding plus a
+  single Starlink dim/hide control ships instead — see *Phase 2*. One control,
+  not a filter panel.)
+- Mobile and tablet layouts (desktop only; the left rail leaves no globe at
+  phone width, and a bottom-sheet variant is not worth the work here)
 - Conjunction / close-approach analysis
 - Any operational or safety-of-flight use. TLE + SGP4 is kilometre-scale at
   epoch and degrades over days. Suitable for visualisation and for pointing a
@@ -71,7 +74,9 @@ Verified against live endpoints on 2026-09-19:
 
 `satcat.csv` supplies `OBJECT_TYPE`, `OWNER`, `LAUNCH_DATE`, `LAUNCH_SITE`,
 `DECAY_DATE`, `PERIOD`, `INCLINATION`, `APOGEE`, `PERIGEE`, `RCS` — the entire
-detail panel and the regime colour-coding, at no cost.
+detail panel and the colour-coding, at no cost. (Revision 3 note: apogee and
+perigee still drive the GEO-belt bucket and the panel's regime line, but not
+the primary colour split — see *Phase 2*.)
 
 ### Propagation benchmark
 
@@ -280,10 +285,15 @@ moves. It renders only the points layer.
 ~200 steps for the orbit trail; project the same samples to the surface,
 accounting for Earth rotation during the period, for the ground track.
 
-**Regime colour-coding** (LEO/MEO/GEO/HEO, derived from SATCAT apogee/perigee)
-ships in phase 2 as the minimal legibility measure. Without it, 16.5k
-undifferentiated dots are hard to read and Starlink visually dominates. Palette
-contrast against a dark starfield is an implementation-time concern.
+**Colour-coding.** Revision 1 specified regime colour-coding (LEO/MEO/GEO/HEO
+from SATCAT apogee/perigee) as the legibility measure against Starlink
+dominance. **Measurement during phase 2 design showed it does not work:** the
+split is LEO 15,763 / GEO 577 / MEO 187 / HEO 51, so 95% of objects are one
+colour, and Starlink *is* LEO. `OBJECT_TYPE` is no better — the active group is
+PAY 16,576 / R/B 2.
+
+Superseded by constellation colour-coding plus a Starlink toggle. See *Phase 2
+— interaction design*.
 
 ### Observer mode (`observer/`)
 
@@ -374,7 +384,8 @@ rather than mirroring the implementation.
 1. **Engine** — ingestion pipeline, globe, 16,578 dots moving correctly,
    validated against SGP4 verification vectors. NaN filtering included.
 2. **Interaction** — picking, search, detail panel, orbit trail, ground track,
-   regime colour-coding.
+   constellation colour-coding with a Starlink control. Desktop only. See
+   *Phase 2 — interaction design*.
 3. **Observer** — location, overhead-now, pass prediction with visibility
    filtering, sky view.
 Phase 4 (`WebGPUPropagator`) is removed. Scaling to the full tracked catalog is
@@ -392,16 +403,18 @@ scheduled ingestion.
 
 ## Open questions
 
-1. **Visual direction** — "visually striking" is a stated success criterion but
-   the aesthetic direction is unspecified. An implementation-time concern for
-   phase 1, not an architectural gap. The only open question that blocks nothing
-   but matters most to the stated goal.
-2. **Sky view renderer** — SVG or ECharts. Deferred to phase 3.
-3. **Project name** — `apsis` is a working title.
+1. **Sky view renderer** — SVG or ECharts. Deferred to phase 3.
+2. **Project name** — `apsis` is a working title.
+3. **Constellation classification is name-pattern based** and will drift as new
+   constellations launch and naming changes. It degrades to `other` rather than
+   failing, but it is not a durable taxonomy.
 
 *Closed in revision 2:* SGP4 verification vector format (reframed — see
 Testing); satellite.js throughput (measured — see Measured findings); whether
 cross-origin isolation is required (it is not).
+
+*Closed in revision 3:* visual direction (mission-control; see *Phase 2*);
+mobile support (out of scope).
 
 ## Risks
 
@@ -451,7 +464,208 @@ End-to-end measurement of the running app: a satellite at 7,335 km radius
 theoretical circular velocity of 7.372 km/s — **0.15% agreement**, with the
 small excess explained by chord-versus-arc over the interval.
 
+## Phase 2 — interaction design
+
+Added in revision 3. Phase 1's spec covered phase 2's *mechanism* (GPU picking,
+one-period trails, ground tracks) but not its UI surface. This section fills
+that gap and corrects the colour-coding decision.
+
+### Scope
+
+Click or search a satellite; see its orbit trail, ground track and a detail
+panel. Constellation colour-coding with a Starlink control. **Desktop only.**
+
+### Visual direction
+
+**Mission control**: monospace, dense label/value tables, thin rules, muted
+blue-grey on the dark field, green for live values. Chosen with eyes on
+mockups. It is an on-theme cliché and was chosen knowing that — the data
+genuinely is tabular, and the density suits a 16,578-object catalog.
+
+One rule to keep it a tool rather than a prop: **status chrome must reflect
+real state.** The header badge reads `TRACKING`, `ERROR` (non-zero SGP4 error
+byte) or `STALE` (manifest aged out). No decorative readouts.
+
+### Layout
+
+A **left rail** holding search, ranked results and the detail panel in one
+column, with the globe filling the remainder. The rail is the natural home for
+capped search results; docking the panel elsewhere would leave the result list
+homeless and force a second surface.
+
+### Search
+
+Ranked, capped and summarised: exact NORAD id, then exact international
+designator, then name prefix, then name substring; top 20 shown with an "and
+*N* more" line. A full substring scan over all 16,578 names measures **1.61 ms**,
+so search runs unthrottled on the main thread with no index structure.
+
+This matters because "starlink" matches **11,114 objects** (67% of the
+catalog). Rendering that as a list is not an option.
+
+### Detail panel
+
+Three blocks:
+
+- **Live** — altitude, speed, ground lat/lon. Derived on the main thread from
+  the position and velocity buffers it already receives, via `eciToGeodetic`
+  and `gstime`. No worker round-trip.
+- **Identity** — name, NORAD id, international designator, object type, owner
+  (expanded), launch date.
+- **Orbit** — apogee, perigee, inclination, period, eccentricity, regime.
+
+**Two altitude conventions coexist and the panel must say so.** SATCAT's
+apogee and perigee are heights above the *equatorial* radius (6378.135 km),
+while live altitude is height above the *WGS84 ellipsoid*. Away from the
+equator the ellipsoid is smaller, so live altitude can legitimately read
+higher than apogee — measured for the ISS at −38° latitude: 430.3 km live
+against a SATCAT apogee of 422 km, with `|r| − 6378.135 = 422.2` confirming
+SATCAT is self-consistent. Unlabelled, this reads as a bug. The panel marks
+the SATCAT rows and states the reference.
+
+Live values arrive at 60 fps but the panel writes to the DOM at **~4 Hz**.
+Digits changing sixty times a second are unreadable, and the React churn buys
+nothing.
+
+Per-object element epoch age was considered and left out. The catalog-wide
+stale banner covers gross failure; per-object freshness is one line to add
+later if wanted.
+
+### Crossing the worker boundary
+
+The worker owns the catalog; the main thread had no access to names or
+metadata. `ready` gains an `index: CatalogIndexEntry[]` parallel to catalog
+order — `noradId`, `name`, `intlDesignator`, `objectType`, `owner`,
+`ownerName`, `launchDate`, `apogeeKm`, `perigeeKm`, `inclinationDeg`,
+`meanMotion`.
+
+Measured **25.4 ms** to structured-clone once at startup. No packing into
+typed arrays: phase 1 already demonstrated the cost of optimising a transfer
+that measurement says is cheap.
+
+After `ready` there is no further messaging for search or the panel. The one
+exception is trail generation (below).
+
+**Three index spaces exist and must not be confused:**
+
+| Space | Range | Used by |
+|---|---|---|
+| Catalog index `i` | `[0, count)` | `index[]`, `positions[]`, `velocities[]` |
+| Live index `j` | `[0, liveIndices.length)` | render buffers, picking |
+| — | | `i = liveIndices[j]` |
+
+Getting this backwards selects the wrong satellite silently — plausible output,
+no error. It gets a dedicated tested helper.
+
+### Owner expansion
+
+SATCAT owner codes are opaque (`CIS`, `RASC`, `TMMC`, `STCT`); the catalog uses
+**99 distinct codes**. Celestrak publishes the authoritative list at
+`https://celestrak.org/satcat/sources.php` — HTML, not a data file, but it
+parses cleanly to 132 code/name pairs and resolves every code present.
+
+Ingestion parses it and joins `ownerName` into the artifact. Because it is
+HTML and can change shape, the parse **requires at least 90 pairs or fails the
+run**, leaving the last-good artifact in place. Unknown codes fall through raw.
+
+**Celestrak's list is not exhaustive.** Measured against the live catalog, 3
+codes present in SATCAT are absent from the sources page — `JOR`, `KWT` and
+`SVK` — affecting 5 objects, which render their raw code. This is accepted
+rather than patched: a private override table would reintroduce the drift the
+authoritative parse exists to avoid, for 0.03% of the catalog.
+
+### Colour-coding and the Starlink control
+
+**"GEO" means two different things and they must not be conflated.**
+`classifyRegime` returns a *regime* (`GEO` = geostationary altitude);
+`classifyConstellation` returns a *bucket* (`geo` = the geostationary belt, as
+a visual grouping). They are separate namespaces with separate functions and
+separate call sites: regime drives the panel's prose, bucket drives colour.
+
+Bucket precedence is **name first, orbit second**: `starlink` → `oneweb` →
+`gnss` → `geo` (orbital) → `other`. Because of that ordering the two disagree,
+by design: 22 objects at geostationary altitude match GNSS names (BeiDou's
+geostationary satellites) and colour as `gnss`, not `geo`.
+
+Measured buckets under that precedence:
+
+| Bucket | Count | Share |
+|---|---|---|
+| `starlink` | 11,114 | 67.0% |
+| `other` | 4,101 | 24.7% |
+| `oneweb` | 651 | 3.9% |
+| `geo` | 555 | 3.3% |
+| `gnss` | 157 | 0.9% |
+
+(The `geo` bucket is 555 rather than the 577 objects at GEO regime, for exactly
+the reason above.)
+
+A per-vertex attribute carries the bucket; a five-entry palette resolves it in
+the shader. The Starlink control is a uniform that dims or discards those
+points — no buffer rebuild.
+
+Hiding 67% of the dots is the single most revealing thing the app does: the GEO
+ring and the GNSS shells only become visible once Starlink is out of the way.
+This is one control, not the filter panel ruled out in Non-goals.
+
+`classifyConstellation` is name-regex based and will drift as constellations
+launch and rename. It degrades to `other`.
+
+### Trails and ground tracks
+
+On selection the worker propagates that one satellite across a full orbital
+period at ~200 steps and returns the samples — the only post-`ready` message.
+
+The trail is a line in the ECI frame. The ground track is the same samples
+converted to geodetic and parented to the **spin group**, so it stays fixed to
+geography while the globe turns. This is phase 1's GMST frame work paying off.
+
+### Picking
+
+GPU colour-ID pass into a 1×1 scissored target at the cursor, points layer
+only, encoding the live index into RGB.
+
+It must reuse the **same Hermite vertex path** as the visible render. Picking
+against independently computed positions would disagree with what is on screen
+within a single frame at 7.6 km/s, and select the wrong object.
+
+### Modules
+
+| Module | Purpose |
+|---|---|
+| `catalog/search.ts` | Ranked, capped search. Pure. |
+| `catalog/regime.ts` | Orbit regime from apogee/perigee. Pure. |
+| `catalog/constellation.ts` | Constellation bucket from name + orbit. Pure. |
+| `catalog/indexing.ts` | Live-index ↔ catalog-index mapping. Pure. |
+| `math/geodetic.ts` | Altitude, speed, ground point. Pure. |
+| `render/picking.ts` | GPU colour-ID pass. |
+| `render/trail.ts` | Orbit trail and ground track geometry. |
+| `ui/Rail.tsx` etc. | Search field, result list, detail panel, legend. |
+
+### Internal sequencing
+
+1. Index message, index-space mapping, search — no globe changes
+2. Picking and the detail panel
+3. Trails and ground tracks
+4. Constellation colour and the Starlink control
+
+Each step is independently demoable.
+
 ## Revision history
+
+### Revision 3 — 2026-09-19
+
+Adds *Phase 2 — interaction design* after phase 1 shipped. Phase 1's spec
+described phase 2's mechanism but not its UI, and left visual direction as the
+top open question.
+
+Corrects one revision-1 decision: **regime colour-coding does not work.**
+Measured, the catalog is 95% LEO and 67% Starlink, and `OBJECT_TYPE` is
+16,576 payloads to 2 rocket bodies. Replaced with constellation colour-coding
+plus a single Starlink dim/hide control.
+
+Resolves visual direction (mission-control, chosen from mockups) and rules
+mobile out of scope.
 
 ### Revision 2 — 2026-09-19
 
