@@ -293,9 +293,19 @@ describe('parseGpResponse', () => {
     expect(() => parseGpResponse('[]')).toThrow(/zero/i);
   });
 
-  it('rejects records missing fields SGP4 requires', () => {
-    const bad = JSON.stringify([{ OBJECT_NAME: 'X', NORAD_CAT_ID: 1 }]);
-    expect(() => parseGpResponse(bad)).toThrow(/MEAN_MOTION/);
+  it('rejects a record missing a field SGP4 requires, naming that field', () => {
+    // Omit exactly one required field so the assertion isolates it. A fixture
+    // missing everything would only ever report whichever field is checked
+    // first, which tests the check order rather than the contract.
+    const complete = JSON.parse(valid)[0] as Record<string, unknown>;
+    delete complete.MEAN_MOTION;
+    expect(() => parseGpResponse(JSON.stringify([complete]))).toThrow(/MEAN_MOTION/);
+  });
+
+  it('names the object whose record is incomplete', () => {
+    const complete = JSON.parse(valid)[0] as Record<string, unknown>;
+    delete complete.INCLINATION;
+    expect(() => parseGpResponse(JSON.stringify([complete]))).toThrow(/900/);
   });
 });
 ```
