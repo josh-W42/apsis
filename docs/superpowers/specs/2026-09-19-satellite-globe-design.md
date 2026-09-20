@@ -559,6 +559,12 @@ Ingestion parses it and joins `ownerName` into the artifact. Because it is
 HTML and can change shape, the parse **requires at least 90 pairs or fails the
 run**, leaving the last-good artifact in place. Unknown codes fall through raw.
 
+**Celestrak's list is not exhaustive.** Measured against the live catalog, 3
+codes present in SATCAT are absent from the sources page — `JOR`, `KWT` and
+`SVK` — affecting 5 objects, which render their raw code. This is accepted
+rather than patched: a private override table would reintroduce the drift the
+authoritative parse exists to avoid, for 0.03% of the catalog.
+
 ### Colour-coding and the Starlink control
 
 **"GEO" means two different things and they must not be conflated.**

@@ -346,7 +346,11 @@ If Celestrak returns 403 it is rate-limiting; wait and retry. On success:
 node -e "const c=require('./public/data/catalog.json');const i=c.find(e=>e.omm.NORAD_CAT_ID===25544);console.log(i.meta.owner,'->',i.meta.ownerName);console.log('unexpanded:',c.filter(e=>e.meta.owner&&!e.meta.ownerName).length)"
 ```
 
-Expected: `ISS -> International Space Station`, and `unexpanded: 0`.
+Expected: `ISS -> International Space Station`, and a *small* unexpanded
+count. Measured on 2026-09-19 it is **5 objects across 3 codes** — `JOR`,
+`KWT` and `SVK` are absent from Celestrak's page. The fallback renders the
+raw code, which is the designed behaviour. A count in the hundreds would
+mean the parse is broken.
 
 - [ ] **Step 13: Commit**
 
