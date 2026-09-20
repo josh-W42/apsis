@@ -1207,12 +1207,20 @@ export async function createPropagationCore(
       };
     },
     dispose() {
+      // Only the propagator — never the runtime. See the note above.
       propagator.dispose();
-      runtime.dispose();
     },
   };
 }
 ```
+
+**Note on runtime lifetime — a real trap, found during implementation:**
+`runtime.dispose()` calls emscripten's `_exit_runtime()`, which tears the WASM
+module down *process-wide and permanently*. Any later
+`createSingleThreadRuntime()` throws `ExitStatus`. Because React StrictMode
+double-invokes effects in development, a core that disposed its own runtime
+would kill the page on the second mount. The runtime is therefore created once,
+cached at module scope, and never disposed; only the `BulkPropagator` is.
 
 **Note on buffer ownership:** `getRawOutput()` returns views into WASM memory that are **overwritten by the next `run()`**. Callers must copy before the next tick. Task 7 does exactly that when posting across the Worker boundary.
 
