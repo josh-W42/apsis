@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { nearestHitInWindow, PICK_RADIUS_CSS } from './pick-window.ts';
-import { HERMITE_ATTRIBUTES, HERMITE_VERTEX_BODY } from './satellites.ts';
+import { HERMITE_ATTRIBUTES, HERMITE_VERTEX_BODY, POINT_SIZE_EXPR } from './satellites.ts';
 
 export interface PickerDeps {
   renderer: THREE.WebGLRenderer;
@@ -42,8 +42,9 @@ export function createPicker(deps: PickerDeps): PickerHandle {
         vPickColor = pickColor;
         vBucket = bucket;
         ${HERMITE_VERTEX_BODY}
-        // Slightly larger than the visible point so thin targets stay clickable.
-        gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 3.0, 8.0);
+        // Identical to the visible pass — see POINT_SIZE_EXPR. Tolerance
+        // comes from the readback window, not from a fatter sprite.
+        gl_PointSize = ${POINT_SIZE_EXPR};
       }
     `,
     fragmentShader: /* glsl */ `

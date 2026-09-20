@@ -92,6 +92,18 @@ export const HERMITE_ATTRIBUTES = /* glsl */ `
  *
  * Declares `mv` for the caller to use in gl_PointSize.
  */
+/**
+ * Point size, shared verbatim by the visible and picking passes.
+ *
+ * They must match: when the pick sprite was larger than the drawn dot, a
+ * satellite whose visible dot did not cover the cursor could still win the
+ * pick, so clicks selected objects that were not under the pointer. Cursor
+ * tolerance belongs to the readback window, not to an inflated sprite.
+ */
+export const POINT_SIZE_EXPR = /* glsl */ `
+  clamp(uPointSize / max(-mv.z, 0.001), 1.0, 5.0) * uSizeScale[int(bucket + 0.5)]
+`;
+
 export const HERMITE_VERTEX_BODY = /* glsl */ `
   float s  = uAlpha;
   float s2 = s * s;
@@ -115,8 +127,7 @@ const vertexShader = /* glsl */ `
     ${HERMITE_VERTEX_BODY}
     // Attenuate with distance, but keep distant GEO objects visible.
     // The per-bucket scale is how Starlink recedes without going dark.
-    float scale = uSizeScale[int(bucket + 0.5)];
-    gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 1.0, 5.0) * scale;
+    gl_PointSize = ${POINT_SIZE_EXPR};
   }
 `;
 
