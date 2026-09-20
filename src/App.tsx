@@ -24,6 +24,7 @@ export function App() {
   const [selected, setSelected] = useState<Selection | null>(null);
   const [live, setLive] = useState<LiveState | null>(null);
   const [starlinkMode, setStarlinkMode] = useState<StarlinkMode>('show');
+  const [follow, setFollow] = useState(false);
 
   useEffect(() => {
     const container = ref.current;
@@ -41,6 +42,7 @@ export function App() {
         setIndex(handle.index);
         handle.onSelection(setSelected);
         handle.onLiveState(setLive);
+        handle.onFollowChange(setFollow);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 
@@ -63,10 +65,22 @@ export function App() {
         <ResultList
           outcome={outcome}
           selectedCatalogIndex={selected?.catalogIndex ?? null}
-          onSelect={(i) => globeRef.current?.select(i)}
+          onSelect={(i) => {
+            globeRef.current?.select(i);
+            // Selecting from search means "show me this one", so follow it.
+            // Clicking a dot on the globe does not, since you are already
+            // looking at where it is.
+            globeRef.current?.setFollow(true);
+          }}
         />
         {entry
-          ? <DetailPanel entry={entry} live={live} status={status} />
+          ? (
+            <DetailPanel
+              entry={entry} live={live} status={status}
+              follow={follow}
+              onFollowChange={(f) => globeRef.current?.setFollow(f)}
+            />
+          )
           : (
             <div style={{
               padding: 12, font: `11px ${theme.mono}`, color: theme.labelDim, lineHeight: 1.7,

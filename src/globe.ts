@@ -39,6 +39,9 @@ export interface GlobeHandle {
   /** Throttled to 4 Hz. Null when nothing selected, or when not renderable. */
   onLiveState(listener: (state: LiveState | null) => void): void;
   setStarlinkMode(mode: StarlinkMode): void;
+  /** Keep the camera locked on the selected satellite as it moves. */
+  setFollow(follow: boolean): void;
+  onFollowChange(listener: (follow: boolean) => void): void;
 }
 
 export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
@@ -77,6 +80,15 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
   const selectionListeners: ((s: Selection | null) => void)[] = [];
   const liveStateListeners: ((s: LiveState | null) => void)[] = [];
   let latestFrame: Frame | null = null;
+  let follow = false;
+  const followListeners: ((f: boolean) => void)[] = [];
+
+  const setFollow = (next: boolean) => {
+    if (next === follow) return;
+    follow = next;
+    if (!follow) view.setFollowTarget(null);
+    for (const l of followListeners) l(follow);
+  };
 
   const setSelection = (catalogIndex: number | null) => {
     if (catalogIndex === (selected?.catalogIndex ?? null)) return;
@@ -96,6 +108,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     if (selected === null || !selected.renderable) {
       for (const l of liveStateListeners) l(null);
       trail.clear();
+      setFollow(false);
     } else {
       client.requestTrail(selected.catalogIndex);
     }
@@ -216,6 +229,22 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     framesRendered++;
     alpha = alphaFor(Date.now(), epochA, epochB);
     satellites.setAlpha(alpha);
+
+    if (follow && selected?.renderable && latestFrame) {
+      // Track the rendered (Hermite-interpolated) position, not the raw
+      // tick position, or the camera lags the dot by up to a full second.
+      const j = liveIndexFromCatalog(reverseMap, selected.catalogIndex);
+      if (j !== null) {
+        const attr = satellites.points.geometry.getAttribute('position');
+        const b = satellites.points.geometry.getAttribute('posB');
+        const t = alpha;
+        view.setFollowTarget({
+          x: (attr.getX(j) * (1 - t) + b.getX(j) * t) * SCENE_SCALE,
+          y: (attr.getY(j) * (1 - t) + b.getY(j) * t) * SCENE_SCALE,
+          z: (attr.getZ(j) * (1 - t) + b.getZ(j) * t) * SCENE_SCALE,
+        });
+      }
+    }
 
     pumpLiveState(() => {
       if (selected === null || !selected.renderable || latestFrame === null) return;
@@ -357,6 +386,8 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     onSelection(listener) { selectionListeners.push(listener); },
     onLiveState(listener) { liveStateListeners.push(listener); },
     setStarlinkMode: satellites.setStarlinkMode,
+    setFollow,
+    onFollowChange(listener) { followListeners.push(listener); },
     staleSince: isStale(manifest, new Date()) ? manifest.generatedAt : null,
   };
 }

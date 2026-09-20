@@ -30,11 +30,13 @@ function SectionLabel({ children }: { children: string }) {
 }
 
 export function DetailPanel({
-  entry, live, status,
+  entry, live, status, follow, onFollowChange,
 }: {
   entry: CatalogIndexEntry;
   live: LiveState | null;
   status: TrackingStatus;
+  follow: boolean;
+  onFollowChange: (follow: boolean) => void;
 }) {
   const regime = classifyRegime(entry.apogeeKm, entry.perigeeKm);
   const bucket = classifyConstellation(entry.name, entry.apogeeKm, entry.perigeeKm);
@@ -49,11 +51,28 @@ export function DetailPanel({
         <span style={{ font: `10px ${theme.mono}`, letterSpacing: '.14em', color: theme.label }}>
           OBJ {entry.noradId}
         </span>
-        <span style={{
-          font: `9px ${theme.mono}`, color: STATUS_COLOR[status],
-          border: `1px solid ${STATUS_COLOR[status]}55`, padding: '1px 5px',
-        }}>
-          {status}
+        <span style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+          {status !== 'ERROR' && (
+            <button
+              onClick={() => onFollowChange(!follow)}
+              title="Keep the camera locked on this satellite"
+              style={{
+                cursor: 'pointer', font: `9px ${theme.mono}`, letterSpacing: '.1em',
+                padding: '1px 5px',
+                background: follow ? '#10203a' : 'transparent',
+                border: `1px solid ${follow ? theme.label : theme.border}`,
+                color: follow ? theme.text : theme.label,
+              }}
+            >
+              FOLLOW
+            </button>
+          )}
+          <span style={{
+            font: `9px ${theme.mono}`, color: STATUS_COLOR[status],
+            border: `1px solid ${STATUS_COLOR[status]}55`, padding: '1px 5px',
+          }}>
+            {status}
+          </span>
         </span>
       </div>
 

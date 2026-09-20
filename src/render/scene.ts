@@ -9,6 +9,12 @@ export interface SceneHandle {
   canvas: HTMLCanvasElement;
   /** Earth-fixed frame (rotates with GMST) — parent ground tracks here. */
   spinGroup: THREE.Group;
+  /**
+   * Move the orbit target to a scene-space point, carrying the camera with
+   * it so the viewing offset — and therefore the user's chosen angle and
+   * zoom — is preserved. Null re-centres on the earth.
+   */
+  setFollowTarget(point: { x: number; y: number; z: number } | null): void;
   setSunDirection(d: { x: number; y: number; z: number }): void;
   setTime(date: Date): void;
   /** Place the camera so the globe opens on a lit view with a visible terminator. */
@@ -74,9 +80,22 @@ export function createScene(container: HTMLElement): SceneHandle {
     console.warn('[render] WebGL context restored');
   });
 
+  const followTarget = new THREE.Vector3();
+  const offset = new THREE.Vector3();
+
   return {
     scene, camera, renderer,
     canvas: renderer.domElement,
+    setFollowTarget(point) {
+      // Translate target and camera together. Assigning only the target
+      // would swing the camera round to face the satellite and fight the
+      // user's own orbiting; moving both keeps their angle and distance.
+      followTarget.set(point?.x ?? 0, point?.y ?? 0, point?.z ?? 0);
+      offset.copy(camera.position).sub(controls.target);
+      controls.target.copy(followTarget);
+      camera.position.copy(followTarget).add(offset);
+      controls.update();
+    },
     spinGroup: earth.spinGroup,
     setSunDirection: earth.setSunDirection,
     setTime: earth.setTime,
