@@ -102,10 +102,14 @@ satellite.js ships two emscripten builds. Inspected directly:
 Since the single-thread build is roughly 50x under budget, the pthreads build
 is unnecessary and **COOP/COEP headers are not needed.**
 
-**A 403 was observed** from Celestrak partway through probing, after only a
-handful of requests. The cause is unconfirmed: it may have been the
-`Accept-Encoding: gzip` request header, or rate limiting. Subsequent requests
-succeeded, which argues for the header.
+**Celestrak rate-limits by IP, and it is easy to hit.** A 403 appeared during
+probing after only a handful of requests. Revision 1 recorded the cause as
+unconfirmed and guessed at the `Accept-Encoding: gzip` header. **Revision 2
+confirms it is rate limiting:** a later request from the real ingestion script,
+sending only a `User-Agent` and no encoding override, also returned 403 after
+that day's repeated fetches.
+
+Budget one GP fetch per ingestion run and no more.
 
 Separately and more concretely: during benchmarking, a repeat request returned
 **HTTP 200 with a plain-text body** rather than JSON:
@@ -176,7 +180,13 @@ dropped.** Its two strongest justifications both failed under measurement:
 - *"It is the WebGPU seam"* — the WebGPU phase has been removed (see below).
 
 Ingestion instead emits **trimmed OMM JSON**: only the fields SGP4 and the
-detail panel actually consume, with SATCAT metadata pre-joined. This deletes the
+detail panel actually consume, with SATCAT metadata pre-joined.
+
+Verified against satellite.js 7.1.0's `io.js`, `json2satrec` reads exactly
+eleven fields. `EPHEMERIS_TYPE`, `CLASSIFICATION_TYPE`, `ELEMENT_SET_NO` and
+`REV_AT_EPOCH` are read by nothing and are dropped. Measured result: **969 KB
+gzipped, 6% smaller than the source GP payload** despite carrying five extra
+metadata fields per object. This deletes the
 `format/` module, its encoder and decoder, its golden-file test and its
 round-trip test, at a cost of roughly 350 KB of transfer and 19 ms of parse.
 
@@ -401,6 +411,45 @@ cross-origin isolation is required (it is not).
 | Celestrak serves a 200 with a non-JSON refusal body | Ingestion validates content before writing; last-good artifact is retained on failure. Observed in practice, not hypothetical |
 | `json2satrec` startup cost (274 ms) delays interactivity | Runs in the worker, off the main thread; globe shell renders first |
 | Texture payload undermines fast first paint | Progressive 2k -> 4k load; measure against the fast-first-paint goal |
+
+## Implementation findings (phase 1)
+
+Four things surfaced during implementation that the design did not anticipate.
+All affect later phases.
+
+**The WASM runtime must never be disposed.** `runtime.dispose()` calls
+emscripten's `_exit_runtime()`, which tears the module down *process-wide and
+permanently* — every later `createSingleThreadRuntime()` throws `ExitStatus`.
+React StrictMode double-invokes effects, so a core disposing its own runtime
+kills the page on the second mount. The runtime is cached at module scope and
+never disposed; only the `BulkPropagator` is.
+
+**The globe must be tilted into the ECI frame.** three.js `SphereGeometry`
+puts its poles on +Y; ECI north is +Z. Satellite positions are ECI, so without
+a quarter-turn about X the globe sits 90 degrees out from every orbit. An
+untextured sphere looks identical either way, which is precisely why this
+needs a regression test rather than a visual check. The globe also rotates by
+GMST so geography tracks the terminator — a prerequisite for phase 2's ground
+tracks.
+
+**Frame scheduling must derive from the wall clock, not accumulate.** The
+first implementation advanced a counter seeded before worker init; the ~300 ms
+of catalog fetch and satrec construction put it permanently behind, and alpha
+reached 1.7. `setAlpha` clamps, so the visible symptom was dots freezing at the
+end of every one-second segment — with no error anywhere. The window
+arithmetic now lives in tested pure functions (`src/render/schedule.ts`).
+
+**Vite needs an ES2022 target.** satellite.js's emscripten builds use
+top-level await. Vite's default `es2020` target fails during dependency
+optimization — including on the pthreads build the app never calls, because
+the optimizer parses every entry in the package's `imports` map.
+
+### Verified against orbital mechanics
+
+End-to-end measurement of the running app: a satellite at 7,335 km radius
+(964 km altitude) moved 73.8 km in 10.0 s, an implied 7.383 km/s against a
+theoretical circular velocity of 7.372 km/s — **0.15% agreement**, with the
+small excess explained by chord-versus-arc over the interval.
 
 ## Revision history
 

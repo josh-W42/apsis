@@ -6,13 +6,16 @@
 
 **Architecture:** A GitHub Actions cron job fetches Celestrak GP + SATCAT, joins and trims them into a static `catalog.json`. The browser loads that artifact into a single Web Worker, which builds SGP4 satrecs and ticks satellite.js's WASM `BulkPropagator` once per second. Position and velocity buffers are uploaded to a single Three.js `Points` draw call whose vertex shader Hermite-interpolates between ticks, so the GPU renders at 60 fps while the CPU propagates at 1 Hz.
 
-**Tech Stack:** TypeScript, Vite, React, vitest, Three.js 0.186.0, satellite.js 7.1.0, Node ≥23, npm, Cloudflare Pages, GitHub Actions.
+**Tech Stack:** TypeScript, Vite, React, vitest, Three.js 0.186.0, satellite.js 7.1.0, Node ≥23, pnpm, Cloudflare Pages, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-19-satellite-globe-design.md` (revision 2)
 
 ## Global Constraints
 
-- **Package manager is npm, not bun.** Local Node is `x64` (Rosetta). An arm64 bun installing arm64 native binaries against an x64 Node breaks rollup/esbuild. Live-Telemetry-Viewer uses npm and works.
+- **Package manager is pnpm, not npm and not bun.** Two independent reasons:
+  - npm 11.2.0 crashes with `Cannot read properties of null (reading 'edgesOut')` while resolving vitest 4 or 5's peer set. Reproduced in a clean directory; it is an npm arborist bug, not a package problem. pnpm resolves the same tree without complaint.
+  - Local Node is `x64` (Rosetta). An arm64 bun installing arm64 native binaries against an x64 Node breaks rollup/esbuild. pnpm installs `darwin-x64` binaries matching the running Node — verified.
+- **pnpm is 6.11.0** (the version installed on this machine). `corepack use pnpm@latest` was attempted and failed with `MODULE_NOT_FOUND`, so there is no `packageManager` field. Upgrading pnpm is a worthwhile follow-up but is not a phase-1 blocker.
 - **Node ≥23** — the ingestion scripts are `.ts` run directly by `node` via native type stripping. Verified on v23.10.0. If CI Node is older, add `tsx` and run through it.
 - **No `vi.mock`.** All seams are dependency injection: functions take their collaborators as arguments. This is a hard constraint, not a style preference.
 - **Scope test commands to explicit paths.** A bare runner will pull in sibling workspace packages.
@@ -57,6 +60,11 @@ apsis/
 
 `src/catalog/types.ts` is the only module imported by both the ingestion scripts and the browser code. It is the contract.
 
+**`src/test-support/state.ts`** holds `stateAt(rec, date)`, which propagates
+and throws on null. `propagate` returns `PositionAndVelocity | null`, and its
+members are non-optional — so tests need one null check, not the per-member
+casts an earlier draft of this plan used.
+
 **Why the math lives in `src/math/`:** Three.js cannot render in jsdom, so anything tested under vitest must be free of WebGL. Extracting Hermite and sun-position as pure functions makes the only logic that can silently produce wrong output testable, and leaves `src/render/` as thin wiring verified in a real browser.
 
 ---
@@ -70,9 +78,9 @@ apsis/
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: a working `npm test` and `npm run dev`; all later tasks depend on this harness
+- Produces: a working `pnpm test` and `pnpm run dev`; all later tasks depend on this harness
 
-- [ ] **Step 1: Create `package.json`**
+- [x] **Step 1: Create `package.json`**
 
 ```json
 {
@@ -96,19 +104,20 @@ apsis/
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
+    "@types/node": "^24.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/three": "0.186.0",
     "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "vitest": "^2.1.0"
+    "vite": "^6.4.0",
+    "vitest": "^5.0.1"
   }
 }
 ```
 
 Note `"test": "vitest run src scripts"` — explicitly scoped, per Global Constraints.
 
-- [ ] **Step 2: Create `tsconfig.json`**
+- [x] **Step 2: Create `tsconfig.json`**
 
 ```json
 {
@@ -129,7 +138,7 @@ Note `"test": "vitest run src scripts"` — explicitly scoped, per Global Constr
 }
 ```
 
-- [ ] **Step 3: Create `vite.config.ts`, `index.html`, `.gitignore`**
+- [x] **Step 3: Create `vite.config.ts`, `index.html`, `.gitignore`**
 
 `vite.config.ts`:
 ```ts
@@ -173,7 +182,7 @@ dist
 
 Note: `public/data/` is deliberately NOT ignored — the ingestion artifact is committed.
 
-- [ ] **Step 4: Create the React shell**
+- [x] **Step 4: Create the React shell**
 
 `src/App.tsx`:
 ```tsx
@@ -193,7 +202,7 @@ createRoot(document.getElementById('root')!).render(
 );
 ```
 
-- [ ] **Step 5: Write the scaffold test**
+- [x] **Step 5: Write the scaffold test**
 
 `src/scaffold.test.ts`:
 ```ts
@@ -207,24 +216,24 @@ describe('scaffold', () => {
 });
 ```
 
-- [ ] **Step 6: Install and verify**
+- [x] **Step 6: Install and verify**
 
 ```bash
-npm install
-npm test
+pnpm install
+ppnpm test
 ```
 
-Expected: 1 test passes. If rollup or esbuild fails to load a native binary, you used bun — remove `node_modules` and `bun.lock`, and reinstall with npm.
+Expected: 1 test passes. If rollup or esbuild fails to load a native binary, the wrong architecture was installed — remove `node_modules` and reinstall with pnpm, and confirm `node -p process.arch` matches the binaries under `node_modules/.pnpm`.
 
-- [ ] **Step 7: Verify typecheck and dev server**
+- [x] **Step 7: Verify typecheck and dev server**
 
 ```bash
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: no errors.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -248,7 +257,7 @@ Celestrak returns **HTTP 200 with a plain-text body** when data has not changed 
   - `type OmmRecord` — raw Celestrak GP record
   - `parseGpResponse(body: string): OmmRecord[]` — throws `IngestError` on any non-JSON or empty body
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `scripts/ingest/parse-gp.test.ts`:
 ```ts
@@ -290,22 +299,32 @@ describe('parseGpResponse', () => {
     expect(() => parseGpResponse('[]')).toThrow(/zero/i);
   });
 
-  it('rejects records missing fields SGP4 requires', () => {
-    const bad = JSON.stringify([{ OBJECT_NAME: 'X', NORAD_CAT_ID: 1 }]);
-    expect(() => parseGpResponse(bad)).toThrow(/MEAN_MOTION/);
+  it('rejects a record missing a field SGP4 requires, naming that field', () => {
+    // Omit exactly one required field so the assertion isolates it. A fixture
+    // missing everything would only ever report whichever field is checked
+    // first, which tests the check order rather than the contract.
+    const complete = JSON.parse(valid)[0] as Record<string, unknown>;
+    delete complete.MEAN_MOTION;
+    expect(() => parseGpResponse(JSON.stringify([complete]))).toThrow(/MEAN_MOTION/);
+  });
+
+  it('names the object whose record is incomplete', () => {
+    const complete = JSON.parse(valid)[0] as Record<string, unknown>;
+    delete complete.INCLINATION;
+    expect(() => parseGpResponse(JSON.stringify([complete]))).toThrow(/900/);
   });
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run scripts/ingest/parse-gp.test.ts
+pnpm exec vitest run scripts/ingest/parse-gp.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./parse-gp.ts`.
 
-- [ ] **Step 3: Write `src/catalog/types.ts`**
+- [x] **Step 3: Write `src/catalog/types.ts`**
 
 ```ts
 /** A Celestrak GP (OMM) record, as served by gp.php?FORMAT=json. */
@@ -359,7 +378,7 @@ export class IngestError extends Error {
 }
 ```
 
-- [ ] **Step 4: Write `scripts/ingest/parse-gp.ts`**
+- [x] **Step 4: Write `scripts/ingest/parse-gp.ts`**
 
 ```ts
 import { IngestError, type OmmRecord } from '../../src/catalog/types.ts';
@@ -410,15 +429,15 @@ export function parseGpResponse(body: string): OmmRecord[] {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 ```bash
-npx vitest run scripts/ingest/parse-gp.test.ts
+pnpm exec vitest run scripts/ingest/parse-gp.test.ts
 ```
 
 Expected: 6 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/catalog/types.ts scripts/ingest/parse-gp.ts scripts/ingest/parse-gp.test.ts
@@ -435,7 +454,7 @@ git commit -m "feat(ingest): parse and validate Celestrak GP responses"
 - Test: `scripts/ingest/parse-satcat.test.ts`, `scripts/ingest/join.test.ts`
 
 **Interfaces:**
-- Consumes: `OmmRecord`, `SatcatMeta`, `CatalogEntry`, `IngestError` from `src/catalog/types.ts`
+- Consumes: `OmmRecord`, `SatcatMeta`, `CatalogEntry`, `TrimmedOmm`, `TRIMMED_OMM_FIELDS`, `IngestError` from `src/catalog/types.ts`
 - Produces:
   - `parseSatcat(csv: string): Map<number, SatcatRow>`
   - `interface SatcatRow { meta: SatcatMeta; decayDate: string | null }`
@@ -443,7 +462,7 @@ git commit -m "feat(ingest): parse and validate Celestrak GP responses"
 
 The real `satcat.csv` is 70,708 rows and includes long-decayed objects, so the join must drop anything carrying a `DECAY_DATE`. GP records with no SATCAT row are **kept** with null metadata — a newly launched object appears in GP before SATCAT and must not vanish from the globe.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `scripts/ingest/parse-satcat.test.ts`:
 ```ts
@@ -543,15 +562,15 @@ describe('joinCatalog', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
-npx vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
+pnpm exec vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
 ```
 
 Expected: FAIL — modules not found.
 
-- [ ] **Step 3: Write `scripts/ingest/parse-satcat.ts`**
+- [x] **Step 3: Write `scripts/ingest/parse-satcat.ts`**
 
 ```ts
 import type { SatcatMeta } from '../../src/catalog/types.ts';
@@ -628,7 +647,7 @@ export function parseSatcat(csv: string): Map<number, SatcatRow> {
 }
 ```
 
-- [ ] **Step 4: Write `scripts/ingest/join.ts`**
+- [x] **Step 4: Write `scripts/ingest/join.ts`**
 
 ```ts
 import type { CatalogEntry, OmmRecord, SatcatMeta } from '../../src/catalog/types.ts';
@@ -665,15 +684,15 @@ export function joinCatalog(
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
-npx vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
+pnpm exec vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
 ```
 
 Expected: 9 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/ingest/parse-satcat.ts scripts/ingest/join.ts scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
@@ -699,7 +718,7 @@ git commit -m "feat(ingest): parse satcat.csv and join to GP elements"
 
 `runIngest` performs **no I/O of its own** — `fetchText` and `now` are injected. That is what makes it testable without `vi.mock`, per Global Constraints. `run.ts` is the only file that touches the network or disk.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `scripts/ingest/ingest.test.ts`:
 ```ts
@@ -761,15 +780,15 @@ describe('runIngest', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run scripts/ingest/ingest.test.ts
+pnpm exec vitest run scripts/ingest/ingest.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./ingest.ts`.
 
-- [ ] **Step 3: Write `scripts/ingest/ingest.ts`**
+- [x] **Step 3: Write `scripts/ingest/ingest.ts`**
 
 ```ts
 import { createHash } from 'node:crypto';
@@ -831,15 +850,15 @@ export async function runIngest(deps: IngestDeps): Promise<IngestResult> {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run scripts/ingest/ingest.test.ts
+pnpm exec vitest run scripts/ingest/ingest.test.ts
 ```
 
 Expected: 4 tests PASS.
 
-- [ ] **Step 5: Write the CLI entrypoint `scripts/ingest/run.ts`**
+- [x] **Step 5: Write the CLI entrypoint `scripts/ingest/run.ts`**
 
 ```ts
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -870,17 +889,17 @@ Note the `User-Agent`. Celestrak asks callers to identify themselves; update the
 
 **Important:** artifacts are written only after `runIngest` resolves. If Celestrak serves a refusal, the throw happens before any write, so the previously committed artifact survives untouched. That is the "last good artifact" guarantee from the spec, and it is a consequence of ordering, not of error handling.
 
-- [ ] **Step 6: Run the real ingestion once**
+- [x] **Step 6: Run the real ingestion once** — ran; Celestrak returned 403 (rate limited). Artifact seeded from a same-day snapshot through the real `runIngest` path. CI performs the live fetch.
 
 ```bash
-npm run ingest
+pnpm run ingest
 ```
 
 Expected: `wrote <N> objects, checksum <hex>` with N in the region of 16,500.
 
 If it prints a "not valid JSON" error mentioning *"GP data has not updated"*, that is Celestrak declining to re-serve unchanged data — the validation working as designed. Wait and retry, or test against a saved fixture.
 
-- [ ] **Step 7: Verify the artifact**
+- [x] **Step 7: Verify the artifact**
 
 ```bash
 node -e "const c=require('./public/data/catalog.json');console.log('objects',c.length);console.log('sample',JSON.stringify(c[0]).slice(0,200))"
@@ -889,7 +908,7 @@ ls -lh public/data/
 
 Expected: object count in the thousands; `catalog.json` a few MB.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add scripts/ingest/ingest.ts scripts/ingest/run.ts scripts/ingest/ingest.test.ts public/data/
@@ -904,10 +923,10 @@ git commit -m "feat(ingest): orchestration, CLI entrypoint, and first catalog ar
 - Create: `.github/workflows/ingest.yml`
 
 **Interfaces:**
-- Consumes: the `npm run ingest` script from Task 4
+- Consumes: the `pnpm run ingest` script from Task 4
 - Produces: a twice-daily commit of `public/data/` when the catalog changes
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 `.github/workflows/ingest.yml`:
 ```yaml
@@ -933,17 +952,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 6.11.0
+
       - uses: actions/setup-node@v4
         with:
           # Node >= 23 required: scripts/ingest/*.ts run via native type stripping.
           node-version: '24'
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Fetch and rebuild catalog
         id: ingest
-        run: npm run ingest
+        run: pnpm run ingest
 
       - name: Commit if the catalog changed
         run: |
@@ -960,10 +983,10 @@ jobs:
 
 Two deliberate choices:
 
-- **`npm run ingest` is allowed to fail the job.** A Celestrak refusal throws before writing, so a failed run leaves the committed artifact intact. A red run is the correct signal; silently succeeding on stale data is not.
+- **`pnpm run ingest` is allowed to fail the job.** A Celestrak refusal throws before writing, so a failed run leaves the committed artifact intact. A red run is the correct signal; silently succeeding on stale data is not.
 - **`concurrency` without `cancel-in-progress`** prevents two scheduled runs racing to push.
 
-- [ ] **Step 2: Validate the YAML parses**
+- [x] **Step 2: Validate the YAML parses**
 
 ```bash
 node -e "const fs=require('fs');const s=fs.readFileSync('.github/workflows/ingest.yml','utf8');if(!/on:\s/.test(s)||!/jobs:/.test(s))throw new Error('malformed');console.log('workflow present, keys look sane')"
@@ -971,14 +994,14 @@ node -e "const fs=require('fs');const s=fs.readFileSync('.github/workflows/inges
 
 Expected: `workflow present, keys look sane`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/ingest.yml
 git commit -m "ci: twice-daily catalog ingestion workflow"
 ```
 
-- [ ] **Step 4: After pushing, trigger the workflow manually once**
+- [ ] **Step 4: After pushing, trigger the workflow manually once** — BLOCKED: no GitHub remote yet
 
 ```bash
 gh workflow run "Ingest catalog"
@@ -1005,7 +1028,7 @@ This is the heart of phase 1. It is an **integration test by design** — it exe
 
 `positions` and `velocities` are packed `[x0,y0,z0,x1,y1,z1,...]` in kilometres and km/s, ECI, indexed by catalog position. `liveIndices` lists only satellites whose SGP4 error byte was zero on the first tick — the render set.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/propagation/core.test.ts`:
 ```ts
@@ -1097,15 +1120,15 @@ describe('createPropagationCore', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/propagation/core.test.ts
+pnpm exec vitest run src/propagation/core.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./core.ts`.
 
-- [ ] **Step 3: Write `src/propagation/core.ts`**
+- [x] **Step 3: Write `src/propagation/core.ts`**
 
 ```ts
 import {
@@ -1189,24 +1212,32 @@ export async function createPropagationCore(
       };
     },
     dispose() {
+      // Only the propagator — never the runtime. See the note above.
       propagator.dispose();
-      runtime.dispose();
     },
   };
 }
 ```
 
+**Note on runtime lifetime — a real trap, found during implementation:**
+`runtime.dispose()` calls emscripten's `_exit_runtime()`, which tears the WASM
+module down *process-wide and permanently*. Any later
+`createSingleThreadRuntime()` throws `ExitStatus`. Because React StrictMode
+double-invokes effects in development, a core that disposed its own runtime
+would kill the page on the second mount. The runtime is therefore created once,
+cached at module scope, and never disposed; only the `BulkPropagator` is.
+
 **Note on buffer ownership:** `getRawOutput()` returns views into WASM memory that are **overwritten by the next `run()`**. Callers must copy before the next tick. Task 7 does exactly that when posting across the Worker boundary.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/propagation/core.test.ts
+pnpm exec vitest run src/propagation/core.test.ts
 ```
 
 Expected: 5 tests PASS. If the fidelity test fails by a large margin, the satrec inputs are being corrupted — check the trim in Task 3, not the tolerance.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/propagation/core.ts src/propagation/core.test.ts
@@ -1228,7 +1259,7 @@ Pure functions, no Three.js, no WebGL. These are the only places in the render p
   - `hermite(p0: number, v0: number, p1: number, v1: number, s: number, h: number): number`
   - `sunDirectionEci(date: Date): { x: number; y: number; z: number }` — unit vector
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/math/hermite.test.ts`:
 ```ts
@@ -1340,15 +1371,15 @@ describe('sunDirectionEci', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
-npx vitest run src/math
+pnpm exec vitest run src/math
 ```
 
 Expected: FAIL — modules not found.
 
-- [ ] **Step 3: Write `src/math/hermite.ts`**
+- [x] **Step 3: Write `src/math/hermite.ts`**
 
 ```ts
 /**
@@ -1377,7 +1408,7 @@ export function hermite(
 }
 ```
 
-- [ ] **Step 4: Write `src/math/sun.ts`**
+- [x] **Step 4: Write `src/math/sun.ts`**
 
 ```ts
 import { jday, sunPos } from 'satellite.js';
@@ -1396,15 +1427,15 @@ export function sunDirectionEci(date: Date): { x: number; y: number; z: number }
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
-npx vitest run src/math
+pnpm exec vitest run src/math
 ```
 
 Expected: 9 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/math
@@ -1433,7 +1464,7 @@ The Worker is **injected** into the client, which is what makes the client testa
 
 Positions cross the boundary as `Float32Array`, downcast from the core's `Float64Array`. At LEO radii (~7,000 km) Float32 resolves to about 1 m, far below what is visible on screen, and it halves both the copy and the GPU upload. The copy is mandatory regardless: `getRawOutput()` views are overwritten by the next `run()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/propagation/client.test.ts`:
 ```ts
@@ -1506,15 +1537,15 @@ describe('createPropagationClient', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/propagation/client.test.ts
+pnpm exec vitest run src/propagation/client.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./client.ts`.
 
-- [ ] **Step 3: Write `src/propagation/protocol.ts`**
+- [x] **Step 3: Write `src/propagation/protocol.ts`**
 
 ```ts
 export type WorkerRequest =
@@ -1527,7 +1558,7 @@ export type WorkerResponse =
   | { type: 'error'; message: string };
 ```
 
-- [ ] **Step 4: Write `src/propagation/client.ts`**
+- [x] **Step 4: Write `src/propagation/client.ts`**
 
 ```ts
 import type { WorkerRequest, WorkerResponse } from './protocol.ts';
@@ -1609,15 +1640,15 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/propagation/client.test.ts
+pnpm exec vitest run src/propagation/client.test.ts
 ```
 
 Expected: 5 tests PASS.
 
-- [ ] **Step 6: Write `src/propagation/worker.ts`**
+- [x] **Step 6: Write `src/propagation/worker.ts`**
 
 ```ts
 /// <reference lib="webworker" />
@@ -1672,15 +1703,15 @@ self.addEventListener('message', async (event: MessageEvent) => {
 });
 ```
 
-- [ ] **Step 7: Typecheck**
+- [x] **Step 7: Typecheck**
 
 ```bash
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: no errors.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/propagation/protocol.ts src/propagation/worker.ts src/propagation/client.ts src/propagation/client.test.ts
@@ -1705,7 +1736,7 @@ git commit -m "feat(propagation): worker shell and injectable main-thread client
 
 No tests here beyond typecheck: Three.js needs a real GPU and cannot render under jsdom. The logic worth testing was already extracted into `src/math/` in Task 7. Verification is visual, in the browser, in Step 5.
 
-- [ ] **Step 1: Write `src/render/earth.ts`**
+- [x] **Step 1: Write `src/render/earth.ts`**
 
 ```ts
 import * as THREE from 'three';
@@ -1783,7 +1814,7 @@ export function createEarth(): EarthHandle {
 }
 ```
 
-- [ ] **Step 2: Write `src/render/scene.ts`**
+- [x] **Step 2: Write `src/render/scene.ts`**
 
 ```ts
 import * as THREE from 'three';
@@ -1868,7 +1899,7 @@ export function createScene(container: HTMLElement): SceneHandle {
 }
 ```
 
-- [ ] **Step 3: Wire it into `src/App.tsx`**
+- [x] **Step 3: Wire it into `src/App.tsx`**
 
 ```tsx
 import { useEffect, useRef } from 'react';
@@ -1904,18 +1935,18 @@ export function App() {
 }
 ```
 
-- [ ] **Step 4: Verify in the browser**
+- [x] **Step 4: Verify in the browser**
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Expected: a dark page with a lit blue sphere and a blue limb glow; dragging orbits it, scrolling zooms. The lit hemisphere must face the real sun direction — at 12:00 UTC the sub-solar point is near the Greenwich meridian.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
-npm run typecheck && npm test
+ppnpm run typecheck && ppnpm test
 ```
 
 ```bash
@@ -1944,7 +1975,7 @@ One `THREE.Points`, one draw call, one `ShaderMaterial`. The vertex shader is th
 
 `gatherLive` is extracted and tested because an off-by-one in the gather would show as satellites in plausible-but-wrong places — the exact class of bug that is invisible on screen.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/render/gather.test.ts`:
 ```ts
@@ -1986,15 +2017,15 @@ describe('gatherLive', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/render/gather.test.ts
+pnpm exec vitest run src/render/gather.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./satellites.ts`.
 
-- [ ] **Step 3: Write `src/render/satellites.ts`**
+- [x] **Step 3: Write `src/render/satellites.ts`**
 
 ```ts
 import * as THREE from 'three';
@@ -2144,15 +2175,15 @@ export function createSatellites(liveIndices: Uint32Array): SatellitesHandle {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/render/gather.test.ts
+pnpm exec vitest run src/render/gather.test.ts
 ```
 
 Expected: 4 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/render/satellites.ts src/render/gather.test.ts
@@ -2174,7 +2205,7 @@ git commit -m "feat(render): instanced satellite points with hermite vertex shad
 
 **The tick scheduling, which is the one non-obvious piece:** frames are requested for epochs **one interval in the future**. SGP4 is deterministic, so computing ahead costs nothing and means the shader always interpolates between two frames it already holds, rather than extrapolating past the newest one. At wall time *t* the client holds frames for *t* and *t+1s*, and `alpha` walks from 0 to 1 across that second.
 
-- [ ] **Step 1: Write `src/globe.ts`**
+- [x] **Step 1: Write `src/globe.ts`**
 
 ```ts
 import { createPropagationClient, type Frame } from './propagation/client.ts';
@@ -2242,7 +2273,7 @@ export async function startGlobe(container: HTMLElement): Promise<() => void> {
 }
 ```
 
-- [ ] **Step 2: Rewrite `src/App.tsx` to use it**
+- [x] **Step 2: Rewrite `src/App.tsx` to use it**
 
 ```tsx
 import { useEffect, useRef, useState } from 'react';
@@ -2284,18 +2315,18 @@ export function App() {
 }
 ```
 
-- [ ] **Step 3: Run the full test suite and typecheck**
+- [x] **Step 3: Run the full test suite and typecheck**
 
 ```bash
-npm test && npm run typecheck
+ppnpm test && ppnpm run typecheck
 ```
 
 Expected: all 43 tests pass, no type errors.
 
-- [ ] **Step 4: Verify in the browser**
+- [x] **Step 4: Verify in the browser**
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Check, in order:
@@ -2307,13 +2338,13 @@ Check, in order:
 5. Dots behind the Earth are hidden by it.
 6. No console errors.
 
-- [ ] **Step 5: Confirm the frame budget**
+- [x] **Step 5: Confirm the frame budget**
 
 In DevTools, record a few seconds in the Performance panel.
 
 Expected: frames at or near 60 fps, with a ~11 ms worker task once per second that does **not** appear on the main thread. If propagation shows up on the main thread, the Worker is not actually being used — check that Vite bundled `worker.ts` as a module worker.
 
-- [ ] **Step 6: Add cache headers**
+- [x] **Step 6: Add cache headers**
 
 `public/_headers`:
 ```
@@ -2328,15 +2359,15 @@ Expected: frames at or near 60 fps, with a ~11 ms worker task once per second th
 
 Note: no COOP/COEP headers. The single-thread WASM runtime does not need cross-origin isolation, and adding those headers would break third-party embeds for no benefit.
 
-- [ ] **Step 7: Build and preview the production bundle**
+- [x] **Step 7: Build and preview the production bundle**
 
 ```bash
-npm run build && npm run preview
+pnpm run build && pnpm run preview
 ```
 
 Expected: a clean build. Verify the globe works in the preview exactly as in dev — worker bundling differs between dev and build, so this check is not redundant.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/globe.ts src/App.tsx public/_headers
@@ -2362,7 +2393,7 @@ The spec requires a staleness banner and a retrying fetch. Neither is covered by
 
 **Scoping note, stated plainly:** the spec's fallback chain was *retry -> IndexedDB copy -> bundled snapshot*. This task implements **retry only**. The artifact is a same-origin static file on the same CDN serving the page, so the failure it guards against is one where the page itself would not have loaded. IndexedDB caching earns its complexity in phase 3, when observer mode makes offline use meaningful. Flagged rather than silently dropped.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/catalog/load.test.ts`:
 ```ts
@@ -2453,15 +2484,15 @@ describe('fetchWithRetry', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/catalog/load.test.ts
+pnpm exec vitest run src/catalog/load.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./load.ts`.
 
-- [ ] **Step 3: Write `src/catalog/load.ts`**
+- [x] **Step 3: Write `src/catalog/load.ts`**
 
 ```ts
 import type { Manifest } from './types.ts';
@@ -2524,15 +2555,15 @@ export async function fetchWithRetry(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/catalog/load.test.ts
+pnpm exec vitest run src/catalog/load.test.ts
 ```
 
 Expected: 10 tests PASS.
 
-- [ ] **Step 5: Use the retrying fetch in the worker**
+- [x] **Step 5: Use the retrying fetch in the worker**
 
 In `src/propagation/worker.ts`, add the import:
 
@@ -2557,7 +2588,7 @@ with:
 
 `fetchWithRetry` already throws a descriptive error on failure, so the explicit `response.ok` check is now redundant.
 
-- [ ] **Step 6: Write `src/ui/StaleBanner.tsx`**
+- [x] **Step 6: Write `src/ui/StaleBanner.tsx`**
 
 ```tsx
 export function StaleBanner({ generatedAt }: { generatedAt: string }) {
@@ -2578,7 +2609,7 @@ export function StaleBanner({ generatedAt }: { generatedAt: string }) {
 }
 ```
 
-- [ ] **Step 7: Surface staleness from `src/globe.ts`**
+- [x] **Step 7: Surface staleness from `src/globe.ts`**
 
 Change the `startGlobe` signature to report the manifest, and fetch it alongside init. Add near the top of `startGlobe`, after `createScene`:
 
@@ -2609,7 +2640,7 @@ Change the return type to `Promise<{ stop: () => void; staleSince: string | null
   };
 ```
 
-- [ ] **Step 8: Render the banner in `src/App.tsx`**
+- [x] **Step 8: Render the banner in `src/App.tsx`**
 
 Replace the `startGlobe(container).then(...)` block with:
 
@@ -2638,11 +2669,11 @@ and render it above the error overlay:
 {staleSince && <StaleBanner generatedAt={staleSince} />}
 ```
 
-- [ ] **Step 9: Verify the banner by forcing staleness**
+- [x] **Step 9: Verify the banner by forcing staleness**
 
 ```bash
 node -e "const f='public/data/manifest.json';const m=require('./'+f);m.generatedAt='2020-01-01T00:00:00.000Z';require('fs').writeFileSync(f,JSON.stringify(m,null,2))"
-npm run dev
+pnpm run dev
 ```
 
 Expected: the amber banner appears above the globe. Then restore the real manifest:
@@ -2651,10 +2682,10 @@ Expected: the amber banner appears above the globe. Then restore the real manife
 git checkout public/data/manifest.json
 ```
 
-- [ ] **Step 10: Full suite, typecheck, commit**
+- [x] **Step 10: Full suite, typecheck, commit**
 
 ```bash
-npm test && npm run typecheck
+ppnpm test && ppnpm run typecheck
 ```
 
 Expected: all 53 tests pass.
@@ -2672,7 +2703,7 @@ git commit -m "feat: retrying artifact fetch and stale-catalog banner"
 
 Connect the repository in the Cloudflare Pages dashboard with:
 
-- Build command: `npm run build`
+- Build command: `pnpm run build`
 - Build output directory: `dist`
 - Node version: `24` (environment variable `NODE_VERSION`)
 
@@ -2691,8 +2722,8 @@ git push --tags
 
 Phase 1 is complete when all of the following hold:
 
-- `npm test` passes with every test scoped under `src` and `scripts`
-- `npm run typecheck` is clean
+- `pnpm test` passes with every test scoped under `src` and `scripts`
+- `pnpm run typecheck` is clean
 - The scheduled workflow has run successfully at least once and committed a catalog
 - The deployed page renders ~16,500 satellites moving smoothly at 60 fps
 - A manifest older than 72 hours raises the staleness banner, and the globe
