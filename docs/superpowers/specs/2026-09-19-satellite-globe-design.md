@@ -514,6 +514,15 @@ Three blocks:
   (expanded), launch date.
 - **Orbit** — apogee, perigee, inclination, period, eccentricity, regime.
 
+**Two altitude conventions coexist and the panel must say so.** SATCAT's
+apogee and perigee are heights above the *equatorial* radius (6378.135 km),
+while live altitude is height above the *WGS84 ellipsoid*. Away from the
+equator the ellipsoid is smaller, so live altitude can legitimately read
+higher than apogee — measured for the ISS at −38° latitude: 430.3 km live
+against a SATCAT apogee of 422 km, with `|r| − 6378.135 = 422.2` confirming
+SATCAT is self-consistent. Unlabelled, this reads as a bug. The panel marks
+the SATCAT rows and states the reference.
+
 Live values arrive at 60 fps but the panel writes to the DOM at **~4 Hz**.
 Digits changing sixty times a second are unreadable, and the React churn buys
 nothing.

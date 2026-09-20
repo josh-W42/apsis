@@ -10,6 +10,7 @@ import { sunDirectionEci } from './math/sun.ts';
 import { createScene } from './render/scene.ts';
 import { SCENE_SCALE } from './render/earth.ts';
 import { createSatellites, TICK_SECONDS } from './render/satellites.ts';
+import { createTrail } from './render/trail.ts';
 import { alignEpoch, alphaFor, isStaleWindow, nextEpochFor } from './render/schedule.ts';
 
 const TICK_MS = TICK_SECONDS * 1000;
@@ -90,6 +91,9 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     for (const l of selectionListeners) l(selected);
     if (selected === null || !selected.renderable) {
       for (const l of liveStateListeners) l(null);
+      trail.clear();
+    } else {
+      client.requestTrail(selected.catalogIndex);
     }
   };
 
@@ -148,6 +152,13 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
 
   const sunTimer = setInterval(syncSun, 1_000);
 
+  const trail = createTrail(view.scene, view.spinGroup);
+  client.onTrail((t) => {
+    // A trail that arrived after the selection changed is stale.
+    if (t.catalogIndex !== selected?.catalogIndex) return;
+    trail.set(t);
+  });
+
   const picker = createPicker({
     renderer: view.renderer,
     camera: view.camera,
@@ -193,6 +204,31 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
       get epochs() { return { epochA, epochB }; },
       get renderable() { return liveIndices.length; },
       get selected() { return selected; },
+      /** Trail + ground-track state, for verification. */
+      trailInfo() {
+        const lines: Record<string, unknown>[] = [];
+        for (const [name, parent] of [['trail', view.scene], ['track', view.spinGroup]] as const) {
+          for (const child of parent.children) {
+            if (!(child as { isLine?: boolean }).isLine) continue;
+            const attr = (child as unknown as { geometry: { getAttribute(n: string): {
+              count: number; getX(i: number): number; getY(i: number): number; getZ(i: number): number;
+            } | undefined } }).geometry.getAttribute('position');
+            if (!attr) { lines.push({ name, visible: (child as { visible: boolean }).visible, vertices: 0 }); continue; }
+            let minR = Infinity, maxR = -Infinity;
+            for (let i = 0; i < attr.count; i++) {
+              const r = Math.hypot(attr.getX(i), attr.getY(i), attr.getZ(i));
+              if (r < minR) minR = r;
+              if (r > maxR) maxR = r;
+            }
+            lines.push({
+              name, visible: (child as { visible: boolean }).visible,
+              vertices: attr.count,
+              radiusMin: +minR.toFixed(4), radiusMax: +maxR.toFixed(4),
+            });
+          }
+        }
+        return lines;
+      },
       /** Camera position in scene units (earth radii), for occlusion maths. */
       get cameraPosition() {
         const c = view.camera.position;
@@ -259,6 +295,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
       clearInterval(sunTimer);
       view.canvas.removeEventListener('click', onClick);
       picker.dispose();
+      trail.dispose();
       client.dispose();
       satellites.dispose();
       view.dispose();

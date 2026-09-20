@@ -49,6 +49,23 @@ self.addEventListener('message', async (event: MessageEvent) => {
         { type: 'frame', positions, velocities, epochMs: frame.epochMs },
         [positions.buffer, velocities.buffer],
       );
+      return;
+    }
+
+    if (request.type === 'trail') {
+      if (!core) throw new Error('trail before init');
+      const series = core.series(request.catalogIndex, request.epochMs, 200);
+      if (!series) return;
+      post(
+        {
+          type: 'trail',
+          catalogIndex: request.catalogIndex,
+          samples: series.samples,
+          epochMs: series.epochMs,
+          periodMinutes: series.periodMinutes,
+        },
+        [series.samples.buffer, series.epochMs.buffer],
+      );
     }
   } catch (error) {
     post({ type: 'error', message: error instanceof Error ? error.message : String(error) });

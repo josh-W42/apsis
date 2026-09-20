@@ -19,10 +19,19 @@ export interface Frame {
   epochMs: number;
 }
 
+export interface Trail {
+  catalogIndex: number;
+  samples: Float32Array;
+  epochMs: Float64Array;
+  periodMinutes: number;
+}
+
 export interface PropagationClient {
   init(catalogUrl: string): Promise<ReadyInfo>;
   tick(date: Date): void;
   onFrame(listener: (frame: Frame) => void): void;
+  requestTrail(catalogIndex: number): void;
+  onTrail(listener: (trail: Trail) => void): void;
   dispose(): void;
 }
 
@@ -36,6 +45,7 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
   let resolveReady: ((info: ReadyInfo) => void) | undefined;
   let rejectReady: ((error: Error) => void) | undefined;
   const frameListeners: ((frame: Frame) => void)[] = [];
+  const trailListeners: ((trail: Trail) => void)[] = [];
 
   worker.addEventListener('message', (event: MessageEvent) => {
     const message = event.data as WorkerResponse;
@@ -53,6 +63,16 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
             positions: message.positions,
             velocities: message.velocities,
             epochMs: message.epochMs,
+          });
+        }
+        break;
+      case 'trail':
+        for (const listener of trailListeners) {
+          listener({
+            catalogIndex: message.catalogIndex,
+            samples: message.samples,
+            epochMs: message.epochMs,
+            periodMinutes: message.periodMinutes,
           });
         }
         break;
@@ -78,6 +98,10 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
     },
     tick(date) { send({ type: 'tick', epochMs: date.getTime() }); },
     onFrame(listener) { frameListeners.push(listener); },
+    requestTrail(catalogIndex) {
+      send({ type: 'trail', catalogIndex, epochMs: Date.now() });
+    },
+    onTrail(listener) { trailListeners.push(listener); },
     dispose() { worker.terminate(); },
   };
 }

@@ -82,10 +82,22 @@ export function DetailPanel({
         )}
 
         <SectionLabel>ORBIT</SectionLabel>
-        <Row label="APO" value={formatKm(entry.apogeeKm, 0)} />
-        <Row label="PER" value={formatKm(entry.perigeeKm, 0)} />
+        <Row label="APO *" value={formatKm(entry.apogeeKm, 0)} />
+        <Row label="PER *" value={formatKm(entry.perigeeKm, 0)} />
         <Row label="INC" value={`${entry.inclinationDeg.toFixed(3)}°`} />
         <Row label="PRD" value={formatPeriod(periodMinutes(entry.meanMotion))} />
+        {/*
+          Without this note the panel looks broken: live ALT can read higher
+          than APO. Both are right — SATCAT references the equatorial radius
+          (6378.1 km) while ALT is height above the WGS84 ellipsoid, which is
+          smaller away from the equator.
+        */}
+        <div style={{
+          marginTop: 5, font: `9px ${theme.mono}`, color: theme.labelDim, lineHeight: 1.5,
+        }}>
+          * above equatorial radius; ALT is above the WGS84 ellipsoid, so it
+          can exceed APO away from the equator.
+        </div>
 
         <SectionLabel>IDENTITY</SectionLabel>
         <Row label="INTL" value={entry.intlDesignator} />
