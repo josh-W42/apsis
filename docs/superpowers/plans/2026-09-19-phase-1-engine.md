@@ -60,6 +60,11 @@ apsis/
 
 `src/catalog/types.ts` is the only module imported by both the ingestion scripts and the browser code. It is the contract.
 
+**`src/test-support/state.ts`** holds `stateAt(rec, date)`, which propagates
+and throws on null. `propagate` returns `PositionAndVelocity | null`, and its
+members are non-optional — so tests need one null check, not the per-member
+casts an earlier draft of this plan used.
+
 **Why the math lives in `src/math/`:** Three.js cannot render in jsdom, so anything tested under vitest must be free of WebGL. Extracting Hermite and sun-position as pure functions makes the only logic that can silently produce wrong output testable, and leaves `src/render/` as thin wiring verified in a real browser.
 
 ---

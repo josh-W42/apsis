@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { json2satrec, propagate } from 'satellite.js';
+import { json2satrec } from 'satellite.js';
+import { stateAt } from '../test-support/state.ts';
 import { hermite } from './hermite.ts';
 import type { TrimmedOmm } from '../catalog/types.ts';
 
@@ -38,16 +39,11 @@ describe('hermite', () => {
     const t1 = new Date(t0.getTime() + 1000);
     const mid = new Date(t0.getTime() + 500);
 
-    const a = propagate(rec, t0), b = propagate(rec, t1), m = propagate(rec, mid);
-    const pa = a.position as { x: number; y: number; z: number };
-    const va = a.velocity as { x: number; y: number; z: number };
-    const pb = b.position as { x: number; y: number; z: number };
-    const vb = b.velocity as { x: number; y: number; z: number };
-    const pm = m.position as { x: number; y: number; z: number };
+    const a = stateAt(rec, t0), b = stateAt(rec, t1), m = stateAt(rec, mid);
 
     for (const axis of ['x', 'y', 'z'] as const) {
-      const got = hermite(pa[axis], va[axis], pb[axis], vb[axis], 0.5, 1);
-      expect(Math.abs(got - pm[axis])).toBeLessThan(0.01); // km == 10 m
+      const got = hermite(a.p[axis], a.v[axis], b.p[axis], b.v[axis], 0.5, 1);
+      expect(Math.abs(got - m.p[axis])).toBeLessThan(0.01); // km == 10 m
     }
   });
 
@@ -56,13 +52,10 @@ describe('hermite', () => {
     const t0 = new Date('2026-09-19T13:30:00.000Z');
     const t1 = new Date(t0.getTime() + 10_000);
     const mid = new Date(t0.getTime() + 5_000);
-    const a = propagate(rec, t0), b = propagate(rec, t1), m = propagate(rec, mid);
-    const pa = a.position as { x: number }, va = a.velocity as { x: number };
-    const pb = b.position as { x: number }, vb = b.velocity as { x: number };
-    const pm = m.position as { x: number };
+    const a = stateAt(rec, t0), b = stateAt(rec, t1), m = stateAt(rec, mid);
 
-    const linear = pa.x + (pb.x - pa.x) * 0.5;
-    const cubic = hermite(pa.x, va.x, pb.x, vb.x, 0.5, 10);
-    expect(Math.abs(cubic - pm.x)).toBeLessThan(Math.abs(linear - pm.x));
+    const linear = a.p.x + (b.p.x - a.p.x) * 0.5;
+    const cubic = hermite(a.p.x, a.v.x, b.p.x, b.v.x, 0.5, 10);
+    expect(Math.abs(cubic - m.p.x)).toBeLessThan(Math.abs(linear - m.p.x));
   });
 });

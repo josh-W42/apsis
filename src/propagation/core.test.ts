@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { json2satrec, propagate } from 'satellite.js';
+import { json2satrec } from 'satellite.js';
+import { stateAt } from '../test-support/state.ts';
 import { createPropagationCore } from './core.ts';
 import type { CatalogEntry, TrimmedOmm } from '../catalog/types.ts';
 
@@ -38,9 +39,7 @@ describe('createPropagationCore', () => {
     const frame = core.tick(AT);
 
     for (let i = 0; i < CATALOG.length; i++) {
-      const direct = propagate(json2satrec(CATALOG[i]!.omm), AT);
-      expect(direct.position, 'reference propagation should succeed').toBeTruthy();
-      const p = direct.position as { x: number; y: number; z: number };
+      const { p } = stateAt(json2satrec(CATALOG[i]!.omm), AT);
 
       // WASM and the JS port derive from the same Vallado reference; they
       // should agree far more tightly than 1 m. Relax only with a reason.
