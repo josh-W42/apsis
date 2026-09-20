@@ -46,3 +46,26 @@ describe('joinCatalog', () => {
     expect(out.map((e) => e.omm.NORAD_CAT_ID)).toEqual([2, 11, 30]);
   });
 });
+
+describe('joinCatalog trimming', () => {
+  it('drops OMM fields nothing downstream reads', () => {
+    const out = joinCatalog([omm(1)], new Map());
+    const keys = Object.keys(out[0]!.omm);
+    for (const dead of ['EPHEMERIS_TYPE', 'CLASSIFICATION_TYPE',
+                        'ELEMENT_SET_NO', 'REV_AT_EPOCH']) {
+      expect(keys).not.toContain(dead);
+    }
+  });
+
+  it('keeps every field json2satrec reads, plus name and id', () => {
+    const out = joinCatalog([omm(1)], new Map());
+    const keys = Object.keys(out[0]!.omm);
+    for (const required of [
+      'NORAD_CAT_ID', 'EPOCH', 'MEAN_MOTION', 'ECCENTRICITY', 'INCLINATION',
+      'RA_OF_ASC_NODE', 'ARG_OF_PERICENTER', 'MEAN_ANOMALY', 'BSTAR',
+      'MEAN_MOTION_DOT', 'MEAN_MOTION_DDOT', 'OBJECT_NAME', 'OBJECT_ID',
+    ]) {
+      expect(keys).toContain(required);
+    }
+  });
+});

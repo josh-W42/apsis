@@ -102,10 +102,14 @@ satellite.js ships two emscripten builds. Inspected directly:
 Since the single-thread build is roughly 50x under budget, the pthreads build
 is unnecessary and **COOP/COEP headers are not needed.**
 
-**A 403 was observed** from Celestrak partway through probing, after only a
-handful of requests. The cause is unconfirmed: it may have been the
-`Accept-Encoding: gzip` request header, or rate limiting. Subsequent requests
-succeeded, which argues for the header.
+**Celestrak rate-limits by IP, and it is easy to hit.** A 403 appeared during
+probing after only a handful of requests. Revision 1 recorded the cause as
+unconfirmed and guessed at the `Accept-Encoding: gzip` header. **Revision 2
+confirms it is rate limiting:** a later request from the real ingestion script,
+sending only a `User-Agent` and no encoding override, also returned 403 after
+that day's repeated fetches.
+
+Budget one GP fetch per ingestion run and no more.
 
 Separately and more concretely: during benchmarking, a repeat request returned
 **HTTP 200 with a plain-text body** rather than JSON:
@@ -176,7 +180,13 @@ dropped.** Its two strongest justifications both failed under measurement:
 - *"It is the WebGPU seam"* — the WebGPU phase has been removed (see below).
 
 Ingestion instead emits **trimmed OMM JSON**: only the fields SGP4 and the
-detail panel actually consume, with SATCAT metadata pre-joined. This deletes the
+detail panel actually consume, with SATCAT metadata pre-joined.
+
+Verified against satellite.js 7.1.0's `io.js`, `json2satrec` reads exactly
+eleven fields. `EPHEMERIS_TYPE`, `CLASSIFICATION_TYPE`, `ELEMENT_SET_NO` and
+`REV_AT_EPOCH` are read by nothing and are dropped. Measured result: **969 KB
+gzipped, 6% smaller than the source GP payload** despite carrying five extra
+metadata fields per object. This deletes the
 `format/` module, its encoder and decoder, its golden-file test and its
 round-trip test, at a cost of roughly 350 KB of transfer and 19 ms of parse.
 

@@ -99,6 +99,7 @@ apsis/
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
+    "@types/node": "^24.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/three": "0.186.0",
     "@vitejs/plugin-react": "^4.3.0",
@@ -448,7 +449,7 @@ git commit -m "feat(ingest): parse and validate Celestrak GP responses"
 - Test: `scripts/ingest/parse-satcat.test.ts`, `scripts/ingest/join.test.ts`
 
 **Interfaces:**
-- Consumes: `OmmRecord`, `SatcatMeta`, `CatalogEntry`, `IngestError` from `src/catalog/types.ts`
+- Consumes: `OmmRecord`, `SatcatMeta`, `CatalogEntry`, `TrimmedOmm`, `TRIMMED_OMM_FIELDS`, `IngestError` from `src/catalog/types.ts`
 - Produces:
   - `parseSatcat(csv: string): Map<number, SatcatRow>`
   - `interface SatcatRow { meta: SatcatMeta; decayDate: string | null }`

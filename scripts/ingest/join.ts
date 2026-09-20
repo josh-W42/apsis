@@ -1,5 +1,15 @@
-import type { CatalogEntry, OmmRecord, SatcatMeta } from '../../src/catalog/types.ts';
+import {
+  TRIMMED_OMM_FIELDS,
+  type CatalogEntry, type OmmRecord, type SatcatMeta, type TrimmedOmm,
+} from '../../src/catalog/types.ts';
 import type { SatcatRow } from './parse-satcat.ts';
+
+/** Keep only the fields SGP4 and the UI read. See TRIMMED_OMM_FIELDS. */
+function trimOmm(record: OmmRecord): TrimmedOmm {
+  const out = {} as Record<string, unknown>;
+  for (const field of TRIMMED_OMM_FIELDS) out[field] = record[field];
+  return out as TrimmedOmm;
+}
 
 const EMPTY_META: SatcatMeta = {
   objectType: null, owner: null, launchDate: null,
@@ -25,7 +35,7 @@ export function joinCatalog(
   for (const record of omm) {
     const row = satcat.get(record.NORAD_CAT_ID);
     if (row?.decayDate) continue;
-    entries.push({ omm: record, meta: row?.meta ?? EMPTY_META });
+    entries.push({ omm: trimOmm(record), meta: row?.meta ?? EMPTY_META });
   }
   entries.sort((a, b) => a.omm.NORAD_CAT_ID - b.omm.NORAD_CAT_ID);
   return entries;
