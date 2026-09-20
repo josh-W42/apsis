@@ -53,8 +53,8 @@ Consequences, all favourable:
 - Rich filtering and grouping (deferred; constellation colour-coding plus a
   single Starlink dim/hide control ships instead — see *Phase 2*. One control,
   not a filter panel.)
-- Mobile and tablet layouts (desktop only; the left rail leaves no globe at
-  phone width, and a bottom-sheet variant is not worth the work here)
+- ~~Mobile and tablet layouts~~ — **reversed in revision 4.** See
+  *Narrow viewports and touch*.
 - Conjunction / close-approach analysis
 - Any operational or safety-of-flight use. TLE + SGP4 is kilometre-scale at
   epoch and degrades over days. Suitable for visualisation and for pointing a
@@ -656,7 +656,79 @@ within a single frame at 7.6 km/s, and select the wrong object.
 
 Each step is independently demoable.
 
+## Narrow viewports and touch
+
+Added in revision 4, reversing the desktop-only non-goal after the deployed
+site proved unusable on a phone.
+
+### What was actually wrong
+
+Measured at 375x812:
+
+| Problem | Measurement |
+|---|---|
+| Rail dominates | 301px of 375 — **80%**, leaving a 75px strip of globe |
+| Touch targets too small | Pick radius 8 CSS px against a fingertip's ~44px |
+| Taps read as drags | Click slop 4px; finger tremor routinely exceeds it |
+
+### Two signals, kept separate
+
+Layout keys off **viewport width**; hit tolerance keys off **pointer type**.
+Collapsing these into one "is mobile" flag gets both wrong: a narrow desktop
+window has the layout problem without the aiming problem, and a touch laptop
+has the reverse. Splitting them also fixed narrow desktop windows, which were
+never in scope but suffered the same 300px rail.
+
+- `isNarrow(width)` at a **900px** breakpoint drives the drawer. The rail is a
+  fixed 300px, a third of the screen at that width and worse below.
+- `detectPointerProfile(matchMedia)` drives `pickRadiusCss` (8 → 22, giving a
+  44px target) and `clickSlopCss` (4 → 10).
+
+### Layout below the breakpoint
+
+The rail becomes a drawer holding search, results and the legend; a floating
+toggle opens it, and it is `aria-hidden` when closed so a hidden drawer is not
+still reachable by keyboard.
+
+The detail panel **leaves the drawer** and docks as a bottom card showing name,
+status, altitude and speed, expanding to the full table on demand. Selecting
+from search auto-closes the drawer.
+
+The reasoning: on a phone the drawer covers the globe, and selection is a
+visual act. A pure drawer would mean picking blind and then closing to look.
+The bottom card is the only arrangement where the dot and its numbers are on
+screen together.
+
+Above 900px nothing changes.
+
+### Measured after
+
+Hit rate against cursor offset on a coarse pointer: **100% out to 18px, 99% at
+22px, 97% at 30px** — against an 8px cliff before.
+
+### Accepted mobile costs
+
+Deliberately out of scope, not oversights:
+
+- The 5400x2700 day texture still loads on phones, roughly **58 MB of VRAM**.
+- The catalog is still **~8 MB** over cellular.
+- Frame rate on real phone hardware is **unmeasured**. Emulation runs on the
+  desktop GPU and says nothing useful about it.
+
 ## Revision history
+
+### Revision 4 — 2026-09-20
+
+Reverses the desktop-only non-goal. The deployed site gave a phone a 75px
+strip of globe, and tapping a satellite could not work at an 8px pick radius.
+
+Adds *Narrow viewports and touch*: a drawer below 900px, a bottom card for the
+selected satellite, and hit tolerance scaled by pointer type. Layout and
+pointer are treated as independent signals, which also fixed narrow desktop
+windows.
+
+Texture weight, payload size and real-device frame rate are recorded as
+accepted costs rather than silently ignored.
 
 ### Revision 3 — 2026-09-19
 

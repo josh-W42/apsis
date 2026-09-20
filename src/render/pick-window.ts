@@ -1,12 +1,14 @@
 import { decodePickId } from './pick-id.ts';
 
 /**
- * Cursor tolerance in CSS pixels.
+ * Default cursor tolerance in CSS pixels, for a fine pointer.
  *
  * The original implementation read a single device pixel. Because
  * `setViewOffset` scales positions but not `gl_PointSize`, that gave an
  * effective radius of only `pointSize / 2 / dpr` — 2 CSS pixels at DPR 2,
  * which is far below what anyone can hit reliably.
+ *
+ * Touch needs far more — see pickRadiusCss() in input/pointer-profile.ts.
  */
 export const PICK_RADIUS_CSS = 8;
 
