@@ -1379,7 +1379,9 @@ describe('formatLatLon', () => {
 
 describe('formatPeriod', () => {
   it('shows minutes for a LEO orbit', () => {
-    expect(formatPeriod(92.95)).toBe('92.9 min');
+    // Deliberately off a .x5 rounding boundary — this test is about the
+    // format, not about float-to-decimal rounding behaviour.
+    expect(formatPeriod(92.94)).toBe('92.9 min');
   });
 
   it('adds an hour breakdown once the period passes two hours', () => {
