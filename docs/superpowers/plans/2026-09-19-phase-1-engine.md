@@ -6,13 +6,16 @@
 
 **Architecture:** A GitHub Actions cron job fetches Celestrak GP + SATCAT, joins and trims them into a static `catalog.json`. The browser loads that artifact into a single Web Worker, which builds SGP4 satrecs and ticks satellite.js's WASM `BulkPropagator` once per second. Position and velocity buffers are uploaded to a single Three.js `Points` draw call whose vertex shader Hermite-interpolates between ticks, so the GPU renders at 60 fps while the CPU propagates at 1 Hz.
 
-**Tech Stack:** TypeScript, Vite, React, vitest, Three.js 0.186.0, satellite.js 7.1.0, Node ≥23, npm, Cloudflare Pages, GitHub Actions.
+**Tech Stack:** TypeScript, Vite, React, vitest, Three.js 0.186.0, satellite.js 7.1.0, Node ≥23, pnpm, Cloudflare Pages, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-19-satellite-globe-design.md` (revision 2)
 
 ## Global Constraints
 
-- **Package manager is npm, not bun.** Local Node is `x64` (Rosetta). An arm64 bun installing arm64 native binaries against an x64 Node breaks rollup/esbuild. Live-Telemetry-Viewer uses npm and works.
+- **Package manager is pnpm, not npm and not bun.** Two independent reasons:
+  - npm 11.2.0 crashes with `Cannot read properties of null (reading 'edgesOut')` while resolving vitest 4 or 5's peer set. Reproduced in a clean directory; it is an npm arborist bug, not a package problem. pnpm resolves the same tree without complaint.
+  - Local Node is `x64` (Rosetta). An arm64 bun installing arm64 native binaries against an x64 Node breaks rollup/esbuild. pnpm installs `darwin-x64` binaries matching the running Node — verified.
+- **pnpm is 6.11.0** (the version installed on this machine). `corepack use pnpm@latest` was attempted and failed with `MODULE_NOT_FOUND`, so there is no `packageManager` field. Upgrading pnpm is a worthwhile follow-up but is not a phase-1 blocker.
 - **Node ≥23** — the ingestion scripts are `.ts` run directly by `node` via native type stripping. Verified on v23.10.0. If CI Node is older, add `tsx` and run through it.
 - **No `vi.mock`.** All seams are dependency injection: functions take their collaborators as arguments. This is a hard constraint, not a style preference.
 - **Scope test commands to explicit paths.** A bare runner will pull in sibling workspace packages.
@@ -70,7 +73,7 @@ apsis/
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: a working `npm test` and `npm run dev`; all later tasks depend on this harness
+- Produces: a working `pnpm test` and `pnpm run dev`; all later tasks depend on this harness
 
 - [ ] **Step 1: Create `package.json`**
 
@@ -100,8 +103,8 @@ apsis/
     "@types/three": "0.186.0",
     "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "vitest": "^2.1.0"
+    "vite": "^6.4.0",
+    "vitest": "^5.0.1"
   }
 }
 ```
@@ -210,16 +213,16 @@ describe('scaffold', () => {
 - [ ] **Step 6: Install and verify**
 
 ```bash
-npm install
-npm test
+pnpm install
+ppnpm test
 ```
 
-Expected: 1 test passes. If rollup or esbuild fails to load a native binary, you used bun — remove `node_modules` and `bun.lock`, and reinstall with npm.
+Expected: 1 test passes. If rollup or esbuild fails to load a native binary, the wrong architecture was installed — remove `node_modules` and reinstall with pnpm, and confirm `node -p process.arch` matches the binaries under `node_modules/.pnpm`.
 
 - [ ] **Step 7: Verify typecheck and dev server**
 
 ```bash
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: no errors.
@@ -300,7 +303,7 @@ describe('parseGpResponse', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run scripts/ingest/parse-gp.test.ts
+pnpm exec vitest run scripts/ingest/parse-gp.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./parse-gp.ts`.
@@ -413,7 +416,7 @@ export function parseGpResponse(body: string): OmmRecord[] {
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-npx vitest run scripts/ingest/parse-gp.test.ts
+pnpm exec vitest run scripts/ingest/parse-gp.test.ts
 ```
 
 Expected: 6 tests PASS.
@@ -546,7 +549,7 @@ describe('joinCatalog', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-npx vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
+pnpm exec vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
 ```
 
 Expected: FAIL — modules not found.
@@ -668,7 +671,7 @@ export function joinCatalog(
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-npx vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
+pnpm exec vitest run scripts/ingest/parse-satcat.test.ts scripts/ingest/join.test.ts
 ```
 
 Expected: 9 tests PASS.
@@ -764,7 +767,7 @@ describe('runIngest', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run scripts/ingest/ingest.test.ts
+pnpm exec vitest run scripts/ingest/ingest.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./ingest.ts`.
@@ -834,7 +837,7 @@ export async function runIngest(deps: IngestDeps): Promise<IngestResult> {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run scripts/ingest/ingest.test.ts
+pnpm exec vitest run scripts/ingest/ingest.test.ts
 ```
 
 Expected: 4 tests PASS.
@@ -873,7 +876,7 @@ Note the `User-Agent`. Celestrak asks callers to identify themselves; update the
 - [ ] **Step 6: Run the real ingestion once**
 
 ```bash
-npm run ingest
+pnpm run ingest
 ```
 
 Expected: `wrote <N> objects, checksum <hex>` with N in the region of 16,500.
@@ -904,7 +907,7 @@ git commit -m "feat(ingest): orchestration, CLI entrypoint, and first catalog ar
 - Create: `.github/workflows/ingest.yml`
 
 **Interfaces:**
-- Consumes: the `npm run ingest` script from Task 4
+- Consumes: the `pnpm run ingest` script from Task 4
 - Produces: a twice-daily commit of `public/data/` when the catalog changes
 
 - [ ] **Step 1: Write the workflow**
@@ -933,17 +936,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 6.11.0
+
       - uses: actions/setup-node@v4
         with:
           # Node >= 23 required: scripts/ingest/*.ts run via native type stripping.
           node-version: '24'
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Fetch and rebuild catalog
         id: ingest
-        run: npm run ingest
+        run: pnpm run ingest
 
       - name: Commit if the catalog changed
         run: |
@@ -960,7 +967,7 @@ jobs:
 
 Two deliberate choices:
 
-- **`npm run ingest` is allowed to fail the job.** A Celestrak refusal throws before writing, so a failed run leaves the committed artifact intact. A red run is the correct signal; silently succeeding on stale data is not.
+- **`pnpm run ingest` is allowed to fail the job.** A Celestrak refusal throws before writing, so a failed run leaves the committed artifact intact. A red run is the correct signal; silently succeeding on stale data is not.
 - **`concurrency` without `cancel-in-progress`** prevents two scheduled runs racing to push.
 
 - [ ] **Step 2: Validate the YAML parses**
@@ -1100,7 +1107,7 @@ describe('createPropagationCore', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/propagation/core.test.ts
+pnpm exec vitest run src/propagation/core.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./core.ts`.
@@ -1201,7 +1208,7 @@ export async function createPropagationCore(
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/propagation/core.test.ts
+pnpm exec vitest run src/propagation/core.test.ts
 ```
 
 Expected: 5 tests PASS. If the fidelity test fails by a large margin, the satrec inputs are being corrupted — check the trim in Task 3, not the tolerance.
@@ -1343,7 +1350,7 @@ describe('sunDirectionEci', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-npx vitest run src/math
+pnpm exec vitest run src/math
 ```
 
 Expected: FAIL — modules not found.
@@ -1399,7 +1406,7 @@ export function sunDirectionEci(date: Date): { x: number; y: number; z: number }
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-npx vitest run src/math
+pnpm exec vitest run src/math
 ```
 
 Expected: 9 tests PASS.
@@ -1509,7 +1516,7 @@ describe('createPropagationClient', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/propagation/client.test.ts
+pnpm exec vitest run src/propagation/client.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./client.ts`.
@@ -1612,7 +1619,7 @@ export function createPropagationClient(worker: WorkerLike): PropagationClient {
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/propagation/client.test.ts
+pnpm exec vitest run src/propagation/client.test.ts
 ```
 
 Expected: 5 tests PASS.
@@ -1675,7 +1682,7 @@ self.addEventListener('message', async (event: MessageEvent) => {
 - [ ] **Step 7: Typecheck**
 
 ```bash
-npm run typecheck
+pnpm run typecheck
 ```
 
 Expected: no errors.
@@ -1907,7 +1914,7 @@ export function App() {
 - [ ] **Step 4: Verify in the browser**
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Expected: a dark page with a lit blue sphere and a blue limb glow; dragging orbits it, scrolling zooms. The lit hemisphere must face the real sun direction — at 12:00 UTC the sub-solar point is near the Greenwich meridian.
@@ -1915,7 +1922,7 @@ Expected: a dark page with a lit blue sphere and a blue limb glow; dragging orbi
 - [ ] **Step 5: Typecheck and commit**
 
 ```bash
-npm run typecheck && npm test
+ppnpm run typecheck && ppnpm test
 ```
 
 ```bash
@@ -1989,7 +1996,7 @@ describe('gatherLive', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/render/gather.test.ts
+pnpm exec vitest run src/render/gather.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./satellites.ts`.
@@ -2147,7 +2154,7 @@ export function createSatellites(liveIndices: Uint32Array): SatellitesHandle {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/render/gather.test.ts
+pnpm exec vitest run src/render/gather.test.ts
 ```
 
 Expected: 4 tests PASS.
@@ -2287,7 +2294,7 @@ export function App() {
 - [ ] **Step 3: Run the full test suite and typecheck**
 
 ```bash
-npm test && npm run typecheck
+ppnpm test && ppnpm run typecheck
 ```
 
 Expected: all 43 tests pass, no type errors.
@@ -2295,7 +2302,7 @@ Expected: all 43 tests pass, no type errors.
 - [ ] **Step 4: Verify in the browser**
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Check, in order:
@@ -2331,7 +2338,7 @@ Note: no COOP/COEP headers. The single-thread WASM runtime does not need cross-o
 - [ ] **Step 7: Build and preview the production bundle**
 
 ```bash
-npm run build && npm run preview
+pnpm run build && pnpm run preview
 ```
 
 Expected: a clean build. Verify the globe works in the preview exactly as in dev — worker bundling differs between dev and build, so this check is not redundant.
@@ -2456,7 +2463,7 @@ describe('fetchWithRetry', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-npx vitest run src/catalog/load.test.ts
+pnpm exec vitest run src/catalog/load.test.ts
 ```
 
 Expected: FAIL — cannot resolve `./load.ts`.
@@ -2527,7 +2534,7 @@ export async function fetchWithRetry(
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-npx vitest run src/catalog/load.test.ts
+pnpm exec vitest run src/catalog/load.test.ts
 ```
 
 Expected: 10 tests PASS.
@@ -2642,7 +2649,7 @@ and render it above the error overlay:
 
 ```bash
 node -e "const f='public/data/manifest.json';const m=require('./'+f);m.generatedAt='2020-01-01T00:00:00.000Z';require('fs').writeFileSync(f,JSON.stringify(m,null,2))"
-npm run dev
+pnpm run dev
 ```
 
 Expected: the amber banner appears above the globe. Then restore the real manifest:
@@ -2654,7 +2661,7 @@ git checkout public/data/manifest.json
 - [ ] **Step 10: Full suite, typecheck, commit**
 
 ```bash
-npm test && npm run typecheck
+ppnpm test && ppnpm run typecheck
 ```
 
 Expected: all 53 tests pass.
@@ -2672,7 +2679,7 @@ git commit -m "feat: retrying artifact fetch and stale-catalog banner"
 
 Connect the repository in the Cloudflare Pages dashboard with:
 
-- Build command: `npm run build`
+- Build command: `pnpm run build`
 - Build output directory: `dist`
 - Node version: `24` (environment variable `NODE_VERSION`)
 
@@ -2691,8 +2698,8 @@ git push --tags
 
 Phase 1 is complete when all of the following hold:
 
-- `npm test` passes with every test scoped under `src` and `scripts`
-- `npm run typecheck` is clean
+- `pnpm test` passes with every test scoped under `src` and `scripts`
+- `pnpm run typecheck` is clean
 - The scheduled workflow has run successfully at least once and committed a catalog
 - The deployed page renders ~16,500 satellites moving smoothly at 60 fps
 - A manifest older than 72 hours raises the staleness banner, and the globe
