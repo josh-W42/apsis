@@ -1,37 +1,37 @@
-import { useEffect, useRef } from 'react';
-import { sunDirectionEci } from './math/sun.ts';
-import { createScene } from './render/scene.ts';
+import { useEffect, useRef, useState } from 'react';
+import { startGlobe } from './globe.ts';
 
 export function App() {
   const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const container = ref.current;
     if (!container) return;
 
-    let handle: ReturnType<typeof createScene>;
-    try {
-      handle = createScene(container);
-    } catch (error) {
-      container.textContent =
-        'This page needs WebGL2, which this browser did not provide.';
-      console.error(error);
-      return;
-    }
+    let teardown: (() => void) | undefined;
+    let cancelled = false;
 
-    const sync = () => {
-      const now = new Date();
-      handle.setSunDirection(sunDirectionEci(now));
-      handle.setTime(now);
-    };
-    sync();
-    handle.frameSun(sunDirectionEci(new Date()));
-    // Earth turns 0.25 deg per minute; a 1 s cadence keeps the terminator
-    // and the geography visually continuous.
-    const sunTimer = setInterval(sync, 1_000);
+    startGlobe(container)
+      .then((stop) => { if (cancelled) stop(); else teardown = stop; })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : String(e));
+      });
 
-    return () => { clearInterval(sunTimer); handle.dispose(); };
+    return () => { cancelled = true; teardown?.(); };
   }, []);
 
-  return <div ref={ref} style={{ width: '100%', height: '100%' }} />;
+  return (
+    <>
+      <div ref={ref} style={{ width: '100%', height: '100%' }} />
+      {error && (
+        <div style={{
+          position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
+          color: '#ff9b9b', font: '14px system-ui', textAlign: 'center', padding: 24,
+        }}>
+          Could not start the globe: {error}
+        </div>
+      )}
+    </>
+  );
 }
