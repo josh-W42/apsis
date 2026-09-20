@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { decodePickId } from './pick-id.ts';
+import { nearestHitInWindow, PICK_RADIUS_CSS } from './pick-window.ts';
 import { HERMITE_ATTRIBUTES, HERMITE_VERTEX_BODY } from './satellites.ts';
 
 export interface PickerDeps {
@@ -84,13 +84,25 @@ export function createPicker(deps: PickerDeps): PickerHandle {
   );
   scene.add(occluder);
 
-  const target = new THREE.WebGLRenderTarget(1, 1, {
-    format: THREE.RGBAFormat,
-    type: THREE.UnsignedByteType,
-    depthBuffer: true,
-  });
-  const pixel = new Uint8Array(4);
+  // Readback window, sized so the cursor tolerance is PICK_RADIUS_CSS
+  // regardless of device pixel ratio. Rebuilt only when the ratio changes.
+  let windowSize = 0;
+  let target: THREE.WebGLRenderTarget | null = null;
+  let pixels = new Uint8Array(0);
   const size = new THREE.Vector2();
+
+  function ensureWindow(dpr: number) {
+    const wanted = Math.max(1, Math.round(PICK_RADIUS_CSS * dpr) * 2 + 1);
+    if (wanted === windowSize && target) return;
+    target?.dispose();
+    windowSize = wanted;
+    target = new THREE.WebGLRenderTarget(windowSize, windowSize, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      depthBuffer: true,
+    });
+    pixels = new Uint8Array(windowSize * windowSize * 4);
+  }
 
   return {
     pick(cssX, cssY) {
@@ -102,29 +114,35 @@ export function createPicker(deps: PickerDeps): PickerHandle {
       const py = Math.floor(cssY * dpr);
       if (px < 0 || py < 0 || px >= fullW || py >= fullH) return null;
 
+      ensureWindow(dpr);
+      const half = (windowSize - 1) / 2;
       const previousTarget = renderer.getRenderTarget();
 
-      // Render just the one device pixel under the cursor by skewing the
+      // Render the window of device pixels around the cursor by skewing the
       // projection to that sub-rectangle. setViewOffset takes top-left
       // coordinates, which is what CSS gives us.
-      camera.setViewOffset(fullW, fullH, px, py, 1, 1);
+      //
+      // The window — not gl_PointSize — is what provides cursor tolerance.
+      // setViewOffset scales positions but leaves point size in framebuffer
+      // pixels, so widening the sprite alone would not help.
+      camera.setViewOffset(fullW, fullH, px - half, py - half, windowSize, windowSize);
       renderer.setRenderTarget(target);
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
       renderer.render(scene, camera);
-      renderer.readRenderTargetPixels(target, 0, 0, 1, 1, pixel);
+      renderer.readRenderTargetPixels(target!, 0, 0, windowSize, windowSize, pixels);
 
       camera.clearViewOffset();
       renderer.setRenderTarget(previousTarget);
       renderer.setClearColor(0x05070d, 1);
 
-      return decodePickId(pixel[0]!, pixel[1]!, pixel[2]!);
+      return nearestHitInWindow(pixels, windowSize);
     },
     dispose() {
       material.dispose();
       occluder.geometry.dispose();
       (occluder.material as THREE.Material).dispose();
-      target.dispose();
+      target?.dispose();
     },
   };
 }

@@ -1,6 +1,7 @@
 import { buildReverseMap, catalogIndexFromLive, liveIndexFromCatalog } from './catalog/indexing.ts';
 import { fetchWithRetry, isStale } from './catalog/load.ts';
 import type { CatalogIndexEntry, Manifest } from './catalog/types.ts';
+import { isClickGesture, type PointerSample } from './input/gesture.ts';
 import { liveState, type LiveState } from './math/geodetic.ts';
 import { createPicker } from './render/picking.ts';
 import { createThrottle } from './ui/throttle.ts';
@@ -169,12 +170,44 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     uniforms: satellites.uniforms,
   });
 
-  const onClick = (event: MouseEvent) => {
+  // Pointer down/up rather than click: a drag on the canvas still fires a
+  // click on release, so the old listener read every camera rotation as a
+  // click on empty space and cleared the selection.
+  let pressed: PointerSample | null = null;
+  let travelled = 0;
+  let lastMove: PointerSample | null = null;
+
+  const onPointerDown = (event: PointerEvent) => {
+    pressed = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+    lastMove = pressed;
+    travelled = 0;
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pressed || !lastMove) return;
+    travelled += Math.hypot(event.clientX - lastMove.x, event.clientY - lastMove.y);
+    lastMove = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    const down = pressed;
+    pressed = null;
+    lastMove = null;
+    if (!down) return;
+    const up = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+    if (!isClickGesture(down, up, travelled)) return;
+
     const rect = view.canvas.getBoundingClientRect();
-    const liveIndex = picker.pick(event.clientX - rect.left, event.clientY - rect.top);
+    const liveIndex = picker.pick(up.x - rect.left, up.y - rect.top);
     setSelection(liveIndex === null ? null : catalogIndexFromLive(liveIndices, liveIndex));
   };
-  view.canvas.addEventListener('click', onClick);
+
+  const onPointerCancel = () => { pressed = null; lastMove = null; };
+
+  view.canvas.addEventListener('pointerdown', onPointerDown);
+  view.canvas.addEventListener('pointermove', onPointerMove);
+  view.canvas.addEventListener('pointerup', onPointerUp);
+  view.canvas.addEventListener('pointercancel', onPointerCancel);
 
   const pumpLiveState = createThrottle(250);
   let alpha = 0;
@@ -309,7 +342,10 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     stop: () => {
       clearInterval(tickTimer);
       clearInterval(sunTimer);
-      view.canvas.removeEventListener('click', onClick);
+      view.canvas.removeEventListener('pointerdown', onPointerDown);
+      view.canvas.removeEventListener('pointermove', onPointerMove);
+      view.canvas.removeEventListener('pointerup', onPointerUp);
+      view.canvas.removeEventListener('pointercancel', onPointerCancel);
       picker.dispose();
       trail.dispose();
       client.dispose();
