@@ -3,6 +3,8 @@ import { searchCatalog } from './catalog/search.ts';
 import type { CatalogIndexEntry } from './catalog/types.ts';
 import { startGlobe, type GlobeHandle, type Selection } from './globe.ts';
 import type { LiveState } from './math/geodetic.ts';
+import type { StarlinkMode } from './render/satellites.ts';
+import { ConstellationLegend } from './ui/ConstellationLegend.tsx';
 import { DetailPanel } from './ui/DetailPanel.tsx';
 import type { TrackingStatus } from './ui/format.ts';
 import { Rail } from './ui/Rail.tsx';
@@ -21,6 +23,7 @@ export function App() {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Selection | null>(null);
   const [live, setLive] = useState<LiveState | null>(null);
+  const [starlinkMode, setStarlinkMode] = useState<StarlinkMode>('show');
 
   useEffect(() => {
     const container = ref.current;
@@ -72,6 +75,10 @@ export function App() {
               Click a satellite or search by name.
             </div>
           )}
+        <ConstellationLegend
+          mode={starlinkMode}
+          onModeChange={(m) => { setStarlinkMode(m); globeRef.current?.setStarlinkMode(m); }}
+        />
       </Rail>
       {error && (
         <div style={{

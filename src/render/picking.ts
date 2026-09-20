@@ -40,14 +40,23 @@ export function createPicker(deps: PickerDeps): PickerHandle {
       varying vec3 vPickColor;
       void main() {
         vPickColor = pickColor;
+        vBucket = bucket;
         ${HERMITE_VERTEX_BODY}
         // Slightly larger than the visible point so thin targets stay clickable.
         gl_PointSize = clamp(uPointSize / max(-mv.z, 0.001), 3.0, 8.0);
       }
     `,
     fragmentShader: /* glsl */ `
+      uniform float uStarlinkMode;
+      uniform float uStarlinkBucket;
       varying vec3 vPickColor;
+      varying float vBucket;
       void main() {
+        // Hidden satellites must not be pickable. Without this, clicking
+        // where an invisible Starlink sits selects it — the same class of
+        // bug as picking through the earth.
+        if (uStarlinkMode > 1.5 && abs(vBucket - uStarlinkBucket) < 0.5) discard;
+
         vec2 d = gl_PointCoord - vec2(0.5);
         if (dot(d, d) > 0.25) discard;
         gl_FragColor = vec4(vPickColor, 1.0);

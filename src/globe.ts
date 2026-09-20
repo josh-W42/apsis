@@ -9,7 +9,9 @@ import { createPropagationClient, type Frame } from './propagation/client.ts';
 import { sunDirectionEci } from './math/sun.ts';
 import { createScene } from './render/scene.ts';
 import { SCENE_SCALE } from './render/earth.ts';
-import { createSatellites, TICK_SECONDS } from './render/satellites.ts';
+import {
+  buildBucketAttribute, createSatellites, TICK_SECONDS, type StarlinkMode,
+} from './render/satellites.ts';
 import { createTrail } from './render/trail.ts';
 import { alignEpoch, alphaFor, isStaleWindow, nextEpochFor } from './render/schedule.ts';
 
@@ -35,6 +37,7 @@ export interface GlobeHandle {
   onSelection(listener: (selection: Selection | null) => void): void;
   /** Throttled to 4 Hz. Null when nothing selected, or when not renderable. */
   onLiveState(listener: (state: LiveState | null) => void): void;
+  setStarlinkMode(mode: StarlinkMode): void;
 }
 
 export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
@@ -97,7 +100,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     }
   };
 
-  const satellites = createSatellites(liveIndices);
+  const satellites = createSatellites(liveIndices, buildBucketAttribute(index, liveIndices));
   view.scene.add(satellites.points);
 
   // epochA/epochB bracket the interval the shader interpolates across.
@@ -204,6 +207,19 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
       get epochs() { return { epochA, epochB }; },
       get renderable() { return liveIndices.length; },
       get selected() { return selected; },
+      /** Bucket distribution actually uploaded to the GPU, for verification. */
+      bucketHistogram() {
+        const attr = satellites.points.geometry.getAttribute('bucket');
+        const h: Record<number, number> = {};
+        for (let i = 0; i < attr.count; i++) {
+          const b = Math.round(attr.getX(i));
+          h[b] = (h[b] ?? 0) + 1;
+        }
+        return h;
+      },
+      get starlinkMode() {
+        return satellites.uniforms.uStarlinkMode?.value as number;
+      },
       /** Trail + ground-track state, for verification. */
       trailInfo() {
         const lines: Record<string, unknown>[] = [];
@@ -304,6 +320,7 @@ export async function startGlobe(container: HTMLElement): Promise<GlobeHandle> {
     select: setSelection,
     onSelection(listener) { selectionListeners.push(listener); },
     onLiveState(listener) { liveStateListeners.push(listener); },
+    setStarlinkMode: satellites.setStarlinkMode,
     staleSince: isStale(manifest, new Date()) ? manifest.generatedAt : null,
   };
 }

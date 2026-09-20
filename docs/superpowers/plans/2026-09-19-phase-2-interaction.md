@@ -3095,7 +3095,8 @@ pnpm test && pnpm run typecheck && pnpm run dev
 Check:
 
 1. Dots are no longer uniformly blue: Starlink is muted grey-blue, the GEO belt reads as a distinct orange ring, GNSS shells are green.
-2. **Setting Starlink to `hide` reveals the GEO ring and GNSS shells clearly.** This is the payoff the whole decision was made for — if the globe looks much the same, the bucket attribute is not reaching the shader.
+2. **Setting Starlink to `hide` removes roughly two thirds of the dots.** Verified by counting pickable objects: 314 when shown, 95 when hidden, a 69.7% reduction against Starlink's 67.0% share. Note the GEO belt sits at 6.6 earth radii and the default camera is at 3.4, so seeing the ring itself requires zooming out — an earlier draft of this step overstated what is visible at the default framing.
+2b. **Hidden satellites must not be pickable.** The pick fragment shader checks `uStarlinkMode` too; without it, clicking where an invisible Starlink sits selects it — the same class of bug as picking through the earth.
 3. `dim` leaves Starlink faintly visible.
 4. Legend swatches match the dot colours (both read `BUCKET_COLORS`).
 5. Selection, trails and the panel still work in every mode.
