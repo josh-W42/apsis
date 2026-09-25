@@ -5,3 +5,6 @@ dist
 .superpowers
 firebase-debug.log
 .firebase
+
+# Built by `pnpm run ingest`; deployed by the ingest workflow, never committed.
+public/data/
