@@ -6,9 +6,14 @@ on:
     # keeps positions well inside the accuracy SGP4 itself supports.
     - cron: '0 6,18 * * *'
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to Firebase Hosting
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ingest
@@ -17,6 +22,7 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -26,23 +32,25 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Node >= 23 required: scripts/ingest/*.ts run via native type stripping.
+          # Node >= 23 required: scripts/**/*.ts run via native type stripping.
           node-version: '24'
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
+      - run: pnpm test
+
+      # Fails on a Celestrak outage or rate-limit refusal; the deploy step is
+      # then skipped and the last good release stays live.
       - name: Fetch and rebuild catalog
         run: pnpm run ingest
 
-      - name: Commit if the catalog changed
-        run: |
-          if git diff --quiet -- public/data; then
-            echo "Catalog unchanged; nothing to commit."
-            exit 0
-          fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/data
-          git commit -m "chore(data): refresh catalog $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push
+      - run: pnpm run build
+
+      - name: Deploy
+        if: github.event_name == 'schedule' || inputs.deploy
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          channelId: live
