@@ -109,11 +109,16 @@ outright, because SGP4 propagates them to meaningless positions.
 
 ```bash
 pnpm run dev         # dev server on :5174
-pnpm test            # 208 tests
+pnpm test            # 228 tests
 pnpm run typecheck   # tsc --noEmit
 pnpm run build       # typecheck + production bundle to dist/
 pnpm run ingest      # refresh the catalog from Celestrak
 ```
+
+The catalog is not committed. Run `pnpm run ingest` once before `pnpm run dev`.
+Production deploys come from the `Ingest catalog` workflow, twice daily or on
+demand with `gh workflow run ingest.yml` (`-f deploy=false` for a dry run).
+`firebase deploy` refuses to run without `dist/data/manifest.json`.
 
 ### Layout
 

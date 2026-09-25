@@ -51,6 +51,17 @@ describe('loadEarthTextures', () => {
     expect(result.night).toBeNull();
   });
 
+  it('returns nulls when the loader throws synchronously', async () => {
+    // THREE.ImageLoader calls document.createElementNS before any callback,
+    // so outside a DOM (node tests, workers) load() throws instead of erroring.
+    const loader: TextureLoaderLike = {
+      load() { throw new ReferenceError('document is not defined'); },
+    };
+    const result = await loadEarthTextures(loader);
+    expect(result.day).toBeNull();
+    expect(result.night).toBeNull();
+  });
+
   it('keeps whichever half succeeded', async () => {
     const loader = fakeLoader({ [EARTH_TEXTURES.night]: 'fail' });
     const result = await loadEarthTextures(loader);

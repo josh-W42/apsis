@@ -33,7 +33,13 @@ function loadOrNull(
   loader: TextureLoaderLike, url: string,
 ): Promise<THREE.Texture | null> {
   return new Promise((resolve) => {
-    loader.load(url, (texture) => resolve(texture), undefined, () => resolve(null));
+    // A synchronous throw (no DOM, e.g. under node) would otherwise become a
+    // rejection, breaking the promise above.
+    try {
+      loader.load(url, (texture) => resolve(texture), undefined, () => resolve(null));
+    } catch {
+      resolve(null);
+    }
   });
 }
 

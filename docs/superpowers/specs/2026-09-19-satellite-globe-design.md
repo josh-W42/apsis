@@ -406,6 +406,10 @@ author already uses Firebase elsewhere. Nothing in the design depends on the
 host: it serves a static `dist/`, and the cache headers that were written as
 a Cloudflare `_headers` file now live in `firebase.json`.
 
+**The ingestion artifacts are deployed, not committed** (changed 2026-09-25).
+The cron job builds and deploys to Firebase in the same run; `public/data/` is
+ignored by git. See `2026-09-25-deploy-on-ingest-design.md`.
+
 ## Open questions
 
 1. **Sky view renderer** — SVG or ECharts. Deferred to phase 3.
