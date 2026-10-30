@@ -10,7 +10,7 @@ on:
       deploy:
         description: Deploy to Firebase Hosting
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
